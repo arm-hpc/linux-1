@@ -153,6 +153,8 @@ struct vi_sdma_mqd {
 	uint32_t reserved_125;
 	uint32_t reserved_126;
 	uint32_t reserved_127;
+	uint32_t sdma_engine_id;
+	uint32_t sdma_queue_id;
 };
 
 struct vi_mqd {
@@ -419,8 +421,8 @@ struct vi_mqd_allocation {
 	struct vi_mqd mqd;
 	uint32_t wptr_poll_mem;
 	uint32_t rptr_report_mem;
-	uint32_t dynamic_cu_mask;
-	uint32_t dynamic_rb_mask;
+	uint32_t dyamic_cu_mask;
+	uint32_t dyamic_rb_mask;
 };
 
 struct cz_mqd {
