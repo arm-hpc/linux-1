@@ -21,11 +21,11 @@
  *
  */
 #include "pp_debug.h"
-#include <linux/delay.h>
-#include <linux/fb.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/fb.h>
 #include <asm/div64.h>
+#include "linux/delay.h"
 #include "pp_acpi.h"
 #include "ppatomctrl.h"
 #include "atombios.h"
@@ -830,7 +830,7 @@ uint32_t smu7_get_xclk(struct pp_hwmgr *hwmgr)
 {
 	uint32_t reference_clock, tmp;
 	struct cgs_display_info info = {0};
-	struct cgs_mode_info mode_info = {0};
+	struct cgs_mode_info mode_info;
 
 	info.mode_info = &mode_info;
 
@@ -1962,6 +1962,9 @@ static int smu7_thermal_parameter_init(struct pp_hwmgr *hwmgr)
 			temp_reg = PHM_SET_FIELD(temp_reg, CNB_PWRMGT_CNTL, DPM_ENABLED, 0x1);
 			break;
 		default:
+			PP_ASSERT_WITH_CODE(0,
+			"Failed to setup PCC HW register! Wrong GPIO assigned for VDDC_PCC_GPIO_PINID!",
+			);
 			break;
 		}
 		cgs_write_ind_register(hwmgr->device, CGS_IND_REG__SMC, ixCNB_PWRMGT_CNTL, temp_reg);
@@ -3948,9 +3951,10 @@ static int smu7_program_display_gap(struct pp_hwmgr *hwmgr)
 	uint32_t ref_clock;
 	uint32_t refresh_rate = 0;
 	struct cgs_display_info info = {0};
-	struct cgs_mode_info mode_info = {0};
+	struct cgs_mode_info mode_info;
 
 	info.mode_info = &mode_info;
+
 	cgs_get_active_displays_info(hwmgr->device, &info);
 	num_active_displays = info.display_count;
 
@@ -3966,7 +3970,6 @@ static int smu7_program_display_gap(struct pp_hwmgr *hwmgr)
 	frame_time_in_us = 1000000 / refresh_rate;
 
 	pre_vbi_time_in_us = frame_time_in_us - 200 - mode_info.vblank_time_us;
-
 	data->frame_time_x2 = frame_time_in_us * 2 / 100;
 
 	display_gap2 = pre_vbi_time_in_us * (ref_clock / 100);

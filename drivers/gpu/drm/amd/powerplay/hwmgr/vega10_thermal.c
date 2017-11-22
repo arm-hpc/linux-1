@@ -321,7 +321,10 @@ int vega10_fan_ctrl_reset_fan_speed_to_default(struct pp_hwmgr *hwmgr)
 
 	if (phm_cap_enabled(hwmgr->platform_descriptor.platformCaps,
 			PHM_PlatformCaps_MicrocodeFanControl)) {
-		result = vega10_fan_ctrl_start_smc_fan_control(hwmgr);
+		result = vega10_fan_ctrl_set_static_mode(hwmgr,
+				FDO_PWM_MODE_STATIC);
+		if (!result)
+			result = vega10_fan_ctrl_start_smc_fan_control(hwmgr);
 	} else
 		result = vega10_fan_ctrl_set_default_mode(hwmgr);
 
@@ -630,6 +633,7 @@ int tf_vega10_thermal_start_smc_fan_control(struct pp_hwmgr *hwmgr,
 	if (phm_cap_enabled(hwmgr->platform_descriptor.platformCaps,
 			PHM_PlatformCaps_MicrocodeFanControl)) {
 		vega10_fan_ctrl_start_smc_fan_control(hwmgr);
+		vega10_fan_ctrl_set_static_mode(hwmgr, FDO_PWM_MODE_STATIC);
 	}
 
 	return 0;
@@ -702,17 +706,17 @@ static int tf_vega10_thermal_disable_alert(struct pp_hwmgr *hwmgr,
 
 static struct phm_master_table_item
 vega10_thermal_start_thermal_controller_master_list[] = {
-	{ .tableFunction = tf_vega10_thermal_initialize },
-	{ .tableFunction = tf_vega10_thermal_set_temperature_range },
-	{ .tableFunction = tf_vega10_thermal_enable_alert },
+	{NULL, tf_vega10_thermal_initialize},
+	{NULL, tf_vega10_thermal_set_temperature_range},
+	{NULL, tf_vega10_thermal_enable_alert},
 /* We should restrict performance levels to low before we halt the SMC.
  * On the other hand we are still in boot state when we do this
  * so it would be pointless.
  * If this assumption changes we have to revisit this table.
  */
-	{ .tableFunction = tf_vega10_thermal_setup_fan_table },
-	{ .tableFunction = tf_vega10_thermal_start_smc_fan_control },
-	{ }
+	{NULL, tf_vega10_thermal_setup_fan_table},
+	{NULL, tf_vega10_thermal_start_smc_fan_control},
+	{NULL, NULL}
 };
 
 static struct phm_master_table_header
@@ -724,10 +728,10 @@ vega10_thermal_start_thermal_controller_master = {
 
 static struct phm_master_table_item
 vega10_thermal_set_temperature_range_master_list[] = {
-	{ .tableFunction = tf_vega10_thermal_disable_alert },
-	{ .tableFunction = tf_vega10_thermal_set_temperature_range },
-	{ .tableFunction = tf_vega10_thermal_enable_alert },
-	{ }
+	{NULL, tf_vega10_thermal_disable_alert},
+	{NULL, tf_vega10_thermal_set_temperature_range},
+	{NULL, tf_vega10_thermal_enable_alert},
+	{NULL, NULL}
 };
 
 struct phm_master_table_header
