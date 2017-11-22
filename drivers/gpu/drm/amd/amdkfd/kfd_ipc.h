@@ -18,40 +18,34 @@
  * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
+ *
  */
 
-#ifndef HSA_RADEON_CIK_INT_H_INCLUDED
-#define HSA_RADEON_CIK_INT_H_INCLUDED
+#ifndef KFD_IPC_H_
+#define KFD_IPC_H_
 
 #include <linux/types.h>
+#include "kfd_priv.h"
 
-struct cik_ih_ring_entry {
-	uint32_t source_id:8;
-	uint32_t reserved1:8;
-	uint32_t reserved2:16;
-
-	uint32_t data:28;
-	uint32_t reserved3:4;
-
-	/* pipeid, meid and unused3 are officially called RINGID,
-	 * but for our purposes, they always decode into pipe and ME.
-	 */
-	uint32_t pipeid:2;
-	uint32_t meid:2;
-	uint32_t reserved4:4;
-	uint32_t vmid:8;
-	uint32_t pasid:16;
-
-	uint32_t reserved5;
+struct kfd_ipc_obj {
+	struct hlist_node node;
+	struct kref ref;
+	void *data;
+	uint32_t share_handle[4];
 };
 
-#define CIK_INTSRC_DEQUEUE_COMPLETE	0xC6
-#define CIK_INTSRC_CP_END_OF_PIPE	0xB5
-#define CIK_INTSRC_CP_BAD_OPCODE	0xB7
-#define CIK_INTSRC_SQ_INTERRUPT_MSG	0xEF
-#define CIK_INTSRC_GFX_PAGE_INV_FAULT	0x92
-#define CIK_INTSRC_GFX_MEM_PROT_FAULT	0x93
-#define CIK_INTSRC_SDMA_TRAP		0xE0
+int kfd_ipc_import_handle(struct kfd_dev *dev, struct kfd_process *p,
+			  uint32_t gpu_id, uint32_t *share_handle,
+			  uint64_t va_addr, uint64_t *handle,
+			  uint64_t *mmap_offset);
+int kfd_ipc_import_dmabuf(struct kfd_dev *kfd, struct kfd_process *p,
+			  uint32_t gpu_id, int dmabuf_fd,
+			  uint64_t va_addr, uint64_t *handle,
+			  uint64_t *mmap_offset);
+int kfd_ipc_export_as_handle(struct kfd_dev *dev, struct kfd_process *p,
+			     uint64_t handle, uint32_t *ipc_handle);
 
-#endif
+void ipc_obj_get(struct kfd_ipc_obj *obj);
+void ipc_obj_put(struct kfd_ipc_obj **obj);
 
+#endif /* KFD_IPC_H_ */
