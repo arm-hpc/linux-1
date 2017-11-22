@@ -21,7 +21,7 @@
  *
  */
 #include <linux/slab.h>
-#include <drm/drmP.h>
+#include "drmP.h"
 #include "amdgpu.h"
 #include "amdgpu_atombios.h"
 #include "amdgpu_ih.h"
@@ -77,6 +77,7 @@
 #endif
 #include "dce_virtual.h"
 #include "mxgpu_vi.h"
+#include "amdgpu_dm.h"
 
 /*
  * Indirect registers accessor
@@ -1016,6 +1017,7 @@ static int vi_common_early_init(void *handle)
 			AMD_CG_SUPPORT_GFX_RLC_LS |
 			AMD_CG_SUPPORT_GFX_CP_LS |
 			AMD_CG_SUPPORT_GFX_CGTS |
+			AMD_CG_SUPPORT_GFX_MGLS |
 			AMD_CG_SUPPORT_GFX_CGTS_LS |
 			AMD_CG_SUPPORT_GFX_CGCG |
 			AMD_CG_SUPPORT_GFX_CGLS |
@@ -1025,15 +1027,7 @@ static int vi_common_early_init(void *handle)
 			AMD_CG_SUPPORT_SDMA_MGCG |
 			AMD_CG_SUPPORT_SDMA_LS |
 			AMD_CG_SUPPORT_VCE_MGCG;
-		/* rev0 hardware requires workarounds to support PG */
 		adev->pg_flags = 0;
-		if (adev->rev_id != 0x00 || CZ_REV_BRISTOL(adev->pdev->revision)) {
-			adev->pg_flags |= AMD_PG_SUPPORT_GFX_SMG |
-				AMD_PG_SUPPORT_GFX_PIPELINE |
-				AMD_PG_SUPPORT_CP |
-				AMD_PG_SUPPORT_UVD |
-				AMD_PG_SUPPORT_VCE;
-		}
 		adev->external_rev_id = adev->rev_id + 0x1;
 		break;
 	case CHIP_STONEY:
@@ -1496,6 +1490,10 @@ int vi_set_ip_blocks(struct amdgpu_device *adev)
 		amdgpu_ip_block_add(adev, &amdgpu_pp_ip_block);
 		if (adev->enable_virtual_display || amdgpu_sriov_vf(adev))
 			amdgpu_ip_block_add(adev, &dce_virtual_ip_block);
+#if defined(CONFIG_DRM_AMD_DC)
+		else if (amdgpu_device_has_dc_support(adev))
+			amdgpu_ip_block_add(adev, &dm_ip_block);
+#endif
 		else
 			amdgpu_ip_block_add(adev, &dce_v10_1_ip_block);
 		amdgpu_ip_block_add(adev, &gfx_v8_0_ip_block);
@@ -1512,6 +1510,10 @@ int vi_set_ip_blocks(struct amdgpu_device *adev)
 		amdgpu_ip_block_add(adev, &amdgpu_pp_ip_block);
 		if (adev->enable_virtual_display || amdgpu_sriov_vf(adev))
 			amdgpu_ip_block_add(adev, &dce_virtual_ip_block);
+#if defined(CONFIG_DRM_AMD_DC)
+		else if (amdgpu_device_has_dc_support(adev))
+			amdgpu_ip_block_add(adev, &dm_ip_block);
+#endif
 		else
 			amdgpu_ip_block_add(adev, &dce_v10_0_ip_block);
 		amdgpu_ip_block_add(adev, &gfx_v8_0_ip_block);
@@ -1530,6 +1532,10 @@ int vi_set_ip_blocks(struct amdgpu_device *adev)
 		amdgpu_ip_block_add(adev, &amdgpu_pp_ip_block);
 		if (adev->enable_virtual_display)
 			amdgpu_ip_block_add(adev, &dce_virtual_ip_block);
+#if defined(CONFIG_DRM_AMD_DC)
+		else if (amdgpu_device_has_dc_support(adev))
+			amdgpu_ip_block_add(adev, &dm_ip_block);
+#endif
 		else
 			amdgpu_ip_block_add(adev, &dce_v11_2_ip_block);
 		amdgpu_ip_block_add(adev, &gfx_v8_0_ip_block);
@@ -1544,6 +1550,10 @@ int vi_set_ip_blocks(struct amdgpu_device *adev)
 		amdgpu_ip_block_add(adev, &amdgpu_pp_ip_block);
 		if (adev->enable_virtual_display)
 			amdgpu_ip_block_add(adev, &dce_virtual_ip_block);
+#if defined(CONFIG_DRM_AMD_DC)
+		else if (amdgpu_device_has_dc_support(adev))
+			amdgpu_ip_block_add(adev, &dm_ip_block);
+#endif
 		else
 			amdgpu_ip_block_add(adev, &dce_v11_0_ip_block);
 		amdgpu_ip_block_add(adev, &gfx_v8_0_ip_block);
@@ -1561,6 +1571,10 @@ int vi_set_ip_blocks(struct amdgpu_device *adev)
 		amdgpu_ip_block_add(adev, &amdgpu_pp_ip_block);
 		if (adev->enable_virtual_display)
 			amdgpu_ip_block_add(adev, &dce_virtual_ip_block);
+#if defined(CONFIG_DRM_AMD_DC)
+		else if (amdgpu_device_has_dc_support(adev))
+			amdgpu_ip_block_add(adev, &dm_ip_block);
+#endif
 		else
 			amdgpu_ip_block_add(adev, &dce_v11_0_ip_block);
 		amdgpu_ip_block_add(adev, &gfx_v8_1_ip_block);

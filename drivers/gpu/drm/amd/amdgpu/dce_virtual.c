@@ -20,7 +20,7 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  *
  */
-#include <drm/drmP.h>
+#include "drmP.h"
 #include "amdgpu.h"
 #include "amdgpu_pm.h"
 #include "amdgpu_i2c.h"
@@ -110,8 +110,18 @@ static void dce_virtual_bandwidth_update(struct amdgpu_device *adev)
 
 static int dce_virtual_crtc_gamma_set(struct drm_crtc *crtc, u16 *red,
 				      u16 *green, u16 *blue, uint32_t size,
-				      struct drm_modeset_acquire_ctx *ctx)
+                                      struct drm_modeset_acquire_ctx *ctx)
 {
+	struct amdgpu_crtc *amdgpu_crtc = to_amdgpu_crtc(crtc);
+	int i;
+
+	/* userspace palettes are always correct as is */
+	for (i = 0; i < size; i++) {
+		amdgpu_crtc->lut_r[i] = red[i] >> 6;
+		amdgpu_crtc->lut_g[i] = green[i] >> 6;
+		amdgpu_crtc->lut_b[i] = blue[i] >> 6;
+	}
+
 	return 0;
 }
 
@@ -244,6 +254,7 @@ static const struct drm_crtc_helper_funcs dce_virtual_crtc_helper_funcs = {
 static int dce_virtual_crtc_init(struct amdgpu_device *adev, int index)
 {
 	struct amdgpu_crtc *amdgpu_crtc;
+	int i;
 
 	amdgpu_crtc = kzalloc(sizeof(struct amdgpu_crtc) +
 			      (AMDGPUFB_CONN_LIMIT * sizeof(struct drm_connector *)), GFP_KERNEL);
@@ -255,6 +266,12 @@ static int dce_virtual_crtc_init(struct amdgpu_device *adev, int index)
 	drm_mode_crtc_set_gamma_size(&amdgpu_crtc->base, 256);
 	amdgpu_crtc->crtc_id = index;
 	adev->mode_info.crtcs[index] = amdgpu_crtc;
+
+	for (i = 0; i < 256; i++) {
+		amdgpu_crtc->lut_r[i] = i << 2;
+		amdgpu_crtc->lut_g[i] = i << 2;
+		amdgpu_crtc->lut_b[i] = i << 2;
+	}
 
 	amdgpu_crtc->pll_id = ATOM_PPLL_INVALID;
 	amdgpu_crtc->encoder = NULL;
@@ -478,8 +495,6 @@ static int dce_virtual_hw_init(void *handle)
 	case CHIP_HAINAN:
 #endif
 		/* no DCE */
-		break;
-	case CHIP_VEGA10:
 		break;
 	default:
 		DRM_ERROR("Virtual display unsupported ASIC type: 0x%X\n", adev->asic_type);
@@ -768,7 +783,7 @@ static const struct amdgpu_irq_src_funcs dce_virtual_crtc_irq_funcs = {
 
 static void dce_virtual_set_irq_funcs(struct amdgpu_device *adev)
 {
-	adev->crtc_irq.num_types = AMDGPU_CRTC_IRQ_VBLANK6 + 1;
+	adev->crtc_irq.num_types = AMDGPU_CRTC_IRQ_LAST;
 	adev->crtc_irq.funcs = &dce_virtual_crtc_irq_funcs;
 }
 

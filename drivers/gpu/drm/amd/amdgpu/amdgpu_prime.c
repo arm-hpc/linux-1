@@ -65,17 +65,35 @@ amdgpu_gem_prime_import_sg_table(struct drm_device *dev,
 	struct reservation_object *resv = attach->dmabuf->resv;
 	struct amdgpu_device *adev = dev->dev_private;
 	struct amdgpu_bo *bo;
+	struct amdgpu_gem_object *gobj;
 	int ret;
 
 	ww_mutex_lock(&resv->lock, NULL);
 	ret = amdgpu_bo_create(adev, attach->dmabuf->size, PAGE_SIZE, false,
-			       AMDGPU_GEM_DOMAIN_GTT, 0, sg, resv, 0, &bo);
+			       AMDGPU_GEM_DOMAIN_GTT, 0, sg, resv, &bo);
 	ww_mutex_unlock(&resv->lock);
 	if (ret)
 		return ERR_PTR(ret);
 
 	bo->prime_shared_count = 1;
-	return &bo->gem_base;
+
+	gobj = kzalloc(sizeof(struct amdgpu_gem_object), GFP_KERNEL);
+	if (unlikely(!gobj)) {
+		amdgpu_bo_unref(&bo);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	ret = drm_gem_object_init(adev->ddev, &gobj->base, amdgpu_bo_size(bo));
+	if (unlikely(ret)) {
+		kfree(gobj);
+		amdgpu_bo_unref(&bo);
+		return ERR_PTR(ret);
+	}
+
+	list_add(&gobj->list, &bo->gem_objects);
+	gobj->bo = amdgpu_bo_ref(bo);
+
+	return &gobj->base;
 }
 
 int amdgpu_gem_prime_pin(struct drm_gem_object *obj)
@@ -140,4 +158,50 @@ struct dma_buf *amdgpu_gem_prime_export(struct drm_device *dev,
 		return ERR_PTR(-EPERM);
 
 	return drm_gem_prime_export(dev, gobj, flags);
+}
+
+struct drm_gem_object *
+amdgpu_gem_prime_foreign_bo(struct amdgpu_device *adev, struct amdgpu_bo *bo)
+{
+	struct amdgpu_gem_object *gobj;
+	int r;
+
+	ww_mutex_lock(&bo->tbo.resv->lock, NULL);
+
+	list_for_each_entry(gobj, &bo->gem_objects, list) {
+		if (gobj->base.dev != adev->ddev)
+			continue;
+
+		ww_mutex_unlock(&bo->tbo.resv->lock);
+		drm_gem_object_reference(&gobj->base);
+		return &gobj->base;
+	}
+
+
+	gobj = kzalloc(sizeof(struct amdgpu_gem_object), GFP_KERNEL);
+	if (unlikely(!gobj)) {
+		ww_mutex_unlock(&bo->tbo.resv->lock);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	r = drm_gem_object_init(adev->ddev, &gobj->base, amdgpu_bo_size(bo));
+	if (unlikely(r)) {
+		kfree(gobj);
+		ww_mutex_unlock(&bo->tbo.resv->lock);
+		return ERR_PTR(r);
+	}
+
+	list_add(&gobj->list, &bo->gem_objects);
+	gobj->bo = amdgpu_bo_ref(bo);
+	bo->flags |= AMDGPU_GEM_CREATE_CPU_ACCESS_REQUIRED;
+
+	ww_mutex_unlock(&bo->tbo.resv->lock);
+
+	return &gobj->base;
+}
+
+struct drm_gem_object *amdgpu_gem_prime_import(struct drm_device *dev,
+					       struct dma_buf *dma_buf)
+{
+	return drm_gem_prime_import(dev, dma_buf);
 }

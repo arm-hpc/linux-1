@@ -24,7 +24,7 @@
  */
 
 #include <linux/firmware.h>
-#include <drm/drmP.h>
+#include "drmP.h"
 #include "amdgpu.h"
 #include "amdgpu_psp.h"
 #include "amdgpu_ucode.h"
@@ -63,9 +63,7 @@ static int psp_sw_init(void *handle)
 		psp->smu_reload_quirk = psp_v3_1_smu_reload_quirk;
 		break;
 	case CHIP_RAVEN:
-#if 0
 		psp->init_microcode = psp_v10_0_init_microcode;
-#endif
 		psp->prep_cmd_buf = psp_v10_0_prep_cmd_buf;
 		psp->ring_init = psp_v10_0_ring_init;
 		psp->ring_create = psp_v10_0_ring_create;
@@ -256,15 +254,17 @@ static int psp_hw_start(struct psp_context *psp)
 	int ret;
 
 	ret = psp_bootloader_load_sysdrv(psp);
-	if (ret)
+	if (ret){
+		DRM_ERROR("PSP firmware loading failed in psp_bootloader_load_sysdrv  \n");
 		return ret;
+        }
 
 	ret = psp_bootloader_load_sos(psp);
 	if (ret)
 		return ret;
 
 	ret = psp_ring_create(psp, PSP_RING_TYPE__KM);
-	if (ret)
+	if (ret) 
 		return ret;
 
 	ret = psp_tmr_load(psp);
@@ -365,8 +365,10 @@ static int psp_load_fw(struct amdgpu_device *adev)
 		goto failed_mem;
 
 	ret = psp_hw_start(psp);
-	if (ret)
+	if (ret) {
+		DRM_ERROR("PSP firmware loading failed in psp_hw_start \n");
 		goto failed_mem;
+        }
 
 	ret = psp_np_fw_load(psp);
 	if (ret)

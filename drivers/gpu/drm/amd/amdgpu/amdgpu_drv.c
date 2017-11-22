@@ -39,7 +39,7 @@
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
 #include <linux/vga_switcheroo.h>
-#include <drm/drm_crtc_helper.h>
+#include "drm_crtc_helper.h"
 
 #include "amdgpu.h"
 #include "amdgpu_irq.h"
@@ -68,15 +68,14 @@
  * - 3.16.0 - Add reserved vmid support
  * - 3.17.0 - Add AMDGPU_NUM_VRAM_CPU_PAGE_FAULTS.
  * - 3.18.0 - Export gpu always on cu bitmap
- * - 3.19.0 - Add support for UVD MJPEG decode
  */
 #define KMS_DRIVER_MAJOR	3
-#define KMS_DRIVER_MINOR	19
+#define KMS_DRIVER_MINOR	18
 #define KMS_DRIVER_PATCHLEVEL	0
 
 int amdgpu_vram_limit = 0;
 int amdgpu_vis_vram_limit = 0;
-int amdgpu_gart_size = -1; /* auto */
+unsigned amdgpu_gart_size = 256;
 int amdgpu_gtt_size = -1; /* auto */
 int amdgpu_moverate = -1; /* auto */
 int amdgpu_benchmarking = 0;
@@ -102,6 +101,7 @@ int amdgpu_vm_debug = 0;
 int amdgpu_vram_page_split = 512;
 int amdgpu_vm_update_mode = -1;
 int amdgpu_exp_hw_support = 0;
+int amdgpu_dc = -1;
 int amdgpu_sched_jobs = 32;
 int amdgpu_sched_hw_submission = 2;
 int amdgpu_no_evict = 0;
@@ -128,7 +128,7 @@ module_param_named(vramlimit, amdgpu_vram_limit, int, 0600);
 MODULE_PARM_DESC(vis_vramlimit, "Restrict visible VRAM for testing, in megabytes");
 module_param_named(vis_vramlimit, amdgpu_vis_vram_limit, int, 0444);
 
-MODULE_PARM_DESC(gartsize, "Size of GART to setup in megabytes (32, 64, etc., -1=auto)");
+MODULE_PARM_DESC(gartsize, "Size of PCIE/IGP gart to setup in megabytes (32, 64, etc.)");
 module_param_named(gartsize, amdgpu_gart_size, uint, 0600);
 
 MODULE_PARM_DESC(gttsize, "Size of the GTT domain in megabytes (-1 = auto)");
@@ -206,6 +206,9 @@ module_param_named(vram_page_split, amdgpu_vram_page_split, int, 0444);
 MODULE_PARM_DESC(exp_hw_support, "experimental hw support (1 = enable, 0 = disable (default))");
 module_param_named(exp_hw_support, amdgpu_exp_hw_support, int, 0444);
 
+MODULE_PARM_DESC(dc, "Display Core driver (1 = enable, 0 = disable, -1 = auto (default))");
+module_param_named(dc, amdgpu_dc, int, 0444);
+
 MODULE_PARM_DESC(sched_jobs, "the max number of jobs supported in the sw queue (default 32)");
 module_param_named(sched_jobs, amdgpu_sched_jobs, int, 0444);
 
@@ -279,7 +282,7 @@ module_param_named(si_support, amdgpu_si_support, int, 0444);
 
 #ifdef CONFIG_DRM_AMDGPU_CIK
 
-#if defined(CONFIG_DRM_RADEON) || defined(CONFIG_DRM_RADEON_MODULE)
+#if (0 && (defined(CONFIG_DRM_RADEON) || defined(CONFIG_DRM_RADEON_MODULE)))
 int amdgpu_cik_support = 0;
 MODULE_PARM_DESC(cik_support, "CIK support (1 = enabled, 0 = disabled (default))");
 #else
@@ -510,17 +513,17 @@ static const struct pci_device_id pciidlist[] = {
 	{0x1002, 0x6997, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_POLARIS12},
 	{0x1002, 0x699F, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_POLARIS12},
 	/* Vega 10 */
-	{0x1002, 0x6860, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10|AMD_EXP_HW_SUPPORT},
-	{0x1002, 0x6861, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10|AMD_EXP_HW_SUPPORT},
-	{0x1002, 0x6862, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10|AMD_EXP_HW_SUPPORT},
-	{0x1002, 0x6863, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10|AMD_EXP_HW_SUPPORT},
-	{0x1002, 0x6864, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10|AMD_EXP_HW_SUPPORT},
-	{0x1002, 0x6867, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10|AMD_EXP_HW_SUPPORT},
-	{0x1002, 0x6868, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10|AMD_EXP_HW_SUPPORT},
-	{0x1002, 0x686c, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10|AMD_EXP_HW_SUPPORT},
-	{0x1002, 0x687f, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10|AMD_EXP_HW_SUPPORT},
+	{0x1002, 0x6860, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10},
+	{0x1002, 0x6861, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10},
+	{0x1002, 0x6862, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10},
+	{0x1002, 0x6863, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10},
+	{0x1002, 0x6864, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10},
+	{0x1002, 0x6867, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10},
+	{0x1002, 0x6868, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10},
+	{0x1002, 0x686c, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10},
+	{0x1002, 0x687f, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VEGA10},
 	/* Raven */
-	{0x1002, 0x15dd, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_RAVEN|AMD_IS_APU|AMD_EXP_HW_SUPPORT},
+	{0x1002, 0x15dd, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_RAVEN|AMD_IS_APU},
 
 	{0, 0, 0}
 };
@@ -801,21 +804,11 @@ static const struct file_operations amdgpu_driver_kms_fops = {
 #endif
 };
 
-static bool
-amdgpu_get_crtc_scanout_position(struct drm_device *dev, unsigned int pipe,
-				 bool in_vblank_irq, int *vpos, int *hpos,
-				 ktime_t *stime, ktime_t *etime,
-				 const struct drm_display_mode *mode)
-{
-	return amdgpu_get_crtc_scanoutpos(dev, pipe, 0, vpos, hpos,
-					  stime, etime, mode);
-}
-
 static struct drm_driver kms_driver = {
 	.driver_features =
 	    DRIVER_USE_AGP |
 	    DRIVER_HAVE_IRQ | DRIVER_IRQ_SHARED | DRIVER_GEM |
-	    DRIVER_PRIME | DRIVER_RENDER | DRIVER_MODESET | DRIVER_SYNCOBJ,
+	    DRIVER_PRIME | DRIVER_RENDER | DRIVER_MODESET,
 	.load = amdgpu_driver_load_kms,
 	.open = amdgpu_driver_open_kms,
 	.postclose = amdgpu_driver_postclose_kms,
@@ -825,7 +818,7 @@ static struct drm_driver kms_driver = {
 	.enable_vblank = amdgpu_enable_vblank_kms,
 	.disable_vblank = amdgpu_disable_vblank_kms,
 	.get_vblank_timestamp = drm_calc_vbltimestamp_from_scanoutpos,
-	.get_scanout_position = amdgpu_get_crtc_scanout_position,
+	.get_scanout_position = amdgpu_get_crtc_scanoutpos,
 #if defined(CONFIG_DEBUG_FS)
 	.debugfs_init = amdgpu_debugfs_init,
 #endif
@@ -839,12 +832,13 @@ static struct drm_driver kms_driver = {
 	.gem_close_object = amdgpu_gem_object_close,
 	.dumb_create = amdgpu_mode_dumb_create,
 	.dumb_map_offset = amdgpu_mode_dumb_mmap,
+	.dumb_destroy = drm_gem_dumb_destroy,
 	.fops = &amdgpu_driver_kms_fops,
 
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
 	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
 	.gem_prime_export = amdgpu_gem_prime_export,
-	.gem_prime_import = drm_gem_prime_import,
+	.gem_prime_import = amdgpu_gem_prime_import,
 	.gem_prime_pin = amdgpu_gem_prime_pin,
 	.gem_prime_unpin = amdgpu_gem_prime_unpin,
 	.gem_prime_res_obj = amdgpu_gem_prime_res_obj,

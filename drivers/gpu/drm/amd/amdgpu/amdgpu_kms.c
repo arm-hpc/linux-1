@@ -132,8 +132,7 @@ int amdgpu_driver_load_kms(struct drm_device *dev, unsigned long flags)
 	    amdgpu_has_atpx() &&
 	    (amdgpu_is_atpx_hybrid() ||
 	     amdgpu_has_atpx_dgpu_power_cntl()) &&
-	    ((flags & AMD_IS_APU) == 0) &&
-	    !pci_is_thunderbolt_attached(dev->pdev))
+	    ((flags & AMD_IS_APU) == 0))
 		flags |= AMD_IS_PX;
 
 	/* amdgpu_device_init should report only fatal error
@@ -158,6 +157,7 @@ int amdgpu_driver_load_kms(struct drm_device *dev, unsigned long flags)
 				"Error during ACPI methods call\n");
 	}
 
+	amdgpu_amdkfd_load_interface(adev);
 	amdgpu_amdkfd_device_probe(adev);
 	amdgpu_amdkfd_device_init(adev);
 
@@ -455,13 +455,13 @@ static int amdgpu_info_ioctl(struct drm_device *dev, void *data, struct drm_file
 		ui64 = atomic64_read(&adev->num_vram_cpu_page_faults);
 		return copy_to_user(out, &ui64, min(size, 8u)) ? -EFAULT : 0;
 	case AMDGPU_INFO_VRAM_USAGE:
-		ui64 = amdgpu_vram_mgr_usage(&adev->mman.bdev.man[TTM_PL_VRAM]);
+		ui64 = atomic64_read(&adev->vram_usage);
 		return copy_to_user(out, &ui64, min(size, 8u)) ? -EFAULT : 0;
 	case AMDGPU_INFO_VIS_VRAM_USAGE:
-		ui64 = amdgpu_vram_mgr_vis_usage(&adev->mman.bdev.man[TTM_PL_VRAM]);
+		ui64 = atomic64_read(&adev->vram_vis_usage);
 		return copy_to_user(out, &ui64, min(size, 8u)) ? -EFAULT : 0;
 	case AMDGPU_INFO_GTT_USAGE:
-		ui64 = amdgpu_gtt_mgr_usage(&adev->mman.bdev.man[TTM_PL_TT]);
+		ui64 = atomic64_read(&adev->gtt_usage);
 		return copy_to_user(out, &ui64, min(size, 8u)) ? -EFAULT : 0;
 	case AMDGPU_INFO_GDS_CONFIG: {
 		struct drm_amdgpu_info_gds gds_info;
@@ -497,8 +497,7 @@ static int amdgpu_info_ioctl(struct drm_device *dev, void *data, struct drm_file
 		mem.vram.total_heap_size = adev->mc.real_vram_size;
 		mem.vram.usable_heap_size =
 			adev->mc.real_vram_size - adev->vram_pin_size;
-		mem.vram.heap_usage =
-			amdgpu_vram_mgr_usage(&adev->mman.bdev.man[TTM_PL_VRAM]);
+		mem.vram.heap_usage = atomic64_read(&adev->vram_usage);
 		mem.vram.max_allocation = mem.vram.usable_heap_size * 3 / 4;
 
 		mem.cpu_accessible_vram.total_heap_size =
@@ -507,7 +506,7 @@ static int amdgpu_info_ioctl(struct drm_device *dev, void *data, struct drm_file
 			adev->mc.visible_vram_size -
 			(adev->vram_pin_size - adev->invisible_pin_size);
 		mem.cpu_accessible_vram.heap_usage =
-			amdgpu_vram_mgr_vis_usage(&adev->mman.bdev.man[TTM_PL_VRAM]);
+			atomic64_read(&adev->vram_vis_usage);
 		mem.cpu_accessible_vram.max_allocation =
 			mem.cpu_accessible_vram.usable_heap_size * 3 / 4;
 
@@ -515,8 +514,7 @@ static int amdgpu_info_ioctl(struct drm_device *dev, void *data, struct drm_file
 		mem.gtt.total_heap_size *= PAGE_SIZE;
 		mem.gtt.usable_heap_size = mem.gtt.total_heap_size
 			- adev->gart_pin_size;
-		mem.gtt.heap_usage =
-			amdgpu_gtt_mgr_usage(&adev->mman.bdev.man[TTM_PL_TT]);
+		mem.gtt.heap_usage = atomic64_read(&adev->gtt_usage);
 		mem.gtt.max_allocation = mem.gtt.usable_heap_size * 3 / 4;
 
 		return copy_to_user(out, &mem,
@@ -574,8 +572,8 @@ static int amdgpu_info_ioctl(struct drm_device *dev, void *data, struct drm_file
 			dev_info.max_engine_clock = amdgpu_dpm_get_sclk(adev, false) * 10;
 			dev_info.max_memory_clock = amdgpu_dpm_get_mclk(adev, false) * 10;
 		} else {
-			dev_info.max_engine_clock = adev->clock.default_sclk * 10;
-			dev_info.max_memory_clock = adev->clock.default_mclk * 10;
+			dev_info.max_engine_clock = adev->pm.default_sclk * 10;
+			dev_info.max_memory_clock = adev->pm.default_mclk * 10;
 		}
 		dev_info.enabled_rb_pipes_mask = adev->gfx.config.backend_enable_mask;
 		dev_info.num_rb_pipes = adev->gfx.config.max_backends_per_se *
@@ -840,7 +838,7 @@ int amdgpu_driver_open_kms(struct drm_device *dev, struct drm_file *file_priv)
 	}
 
 	if (amdgpu_sriov_vf(adev)) {
-		r = amdgpu_map_static_csa(adev, &fpriv->vm, &fpriv->csa_va);
+		r = amdgpu_map_static_csa(adev, &fpriv->vm);
 		if (r)
 			goto out_suspend;
 	}
@@ -893,8 +891,8 @@ void amdgpu_driver_postclose_kms(struct drm_device *dev,
 	if (amdgpu_sriov_vf(adev)) {
 		/* TODO: how to handle reserve failure */
 		BUG_ON(amdgpu_bo_reserve(adev->virt.csa_obj, true));
-		amdgpu_vm_bo_rmv(adev, fpriv->csa_va);
-		fpriv->csa_va = NULL;
+		amdgpu_vm_bo_rmv(adev, fpriv->vm.csa_bo_va);
+		fpriv->vm.csa_bo_va = NULL;
 		amdgpu_bo_unreserve(adev->virt.csa_obj);
 	}
 
@@ -1032,6 +1030,7 @@ const struct drm_ioctl_desc amdgpu_ioctls_kms[] = {
 	DRM_IOCTL_DEF_DRV(AMDGPU_GEM_VA, amdgpu_gem_va_ioctl, DRM_AUTH|DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(AMDGPU_GEM_OP, amdgpu_gem_op_ioctl, DRM_AUTH|DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(AMDGPU_GEM_USERPTR, amdgpu_gem_userptr_ioctl, DRM_AUTH|DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(AMDGPU_FREESYNC, amdgpu_freesync_ioctl, DRM_MASTER)
 };
 const int amdgpu_max_kms_ioctl = ARRAY_SIZE(amdgpu_ioctls_kms);
 

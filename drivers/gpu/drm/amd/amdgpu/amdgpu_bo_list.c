@@ -118,7 +118,8 @@ static int amdgpu_bo_list_set(struct amdgpu_device *adev,
 	int r;
 	unsigned long total_size = 0;
 
-	array = kvmalloc_array(num_entries, sizeof(struct amdgpu_bo_list_entry), GFP_KERNEL);
+	array = kvmalloc_array(num_entries, sizeof(struct amdgpu_bo_list_entry), 
+                               GFP_KERNEL);
 	if (!array)
 		return -ENOMEM;
 	memset(array, 0, num_entries * sizeof(struct amdgpu_bo_list_entry));
@@ -136,7 +137,7 @@ static int amdgpu_bo_list_set(struct amdgpu_device *adev,
 		}
 
 		bo = amdgpu_bo_ref(gem_to_amdgpu_bo(gobj));
-		drm_gem_object_put_unlocked(gobj);
+		drm_gem_object_unreference_unlocked(gobj);
 
 		usermm = amdgpu_ttm_tt_get_usermm(bo->tbo.ttm);
 		if (usermm) {
@@ -156,11 +157,11 @@ static int amdgpu_bo_list_set(struct amdgpu_device *adev,
 		entry->tv.bo = &entry->robj->tbo;
 		entry->tv.shared = !entry->robj->prime_shared_count;
 
-		if (entry->robj->preferred_domains == AMDGPU_GEM_DOMAIN_GDS)
+		if (entry->robj->prefered_domains == AMDGPU_GEM_DOMAIN_GDS)
 			gds_obj = entry->robj;
-		if (entry->robj->preferred_domains == AMDGPU_GEM_DOMAIN_GWS)
+		if (entry->robj->prefered_domains == AMDGPU_GEM_DOMAIN_GWS)
 			gws_obj = entry->robj;
-		if (entry->robj->preferred_domains == AMDGPU_GEM_DOMAIN_OA)
+		if (entry->robj->prefered_domains == AMDGPU_GEM_DOMAIN_OA)
 			oa_obj = entry->robj;
 
 		total_size += amdgpu_bo_size(entry->robj);
@@ -198,16 +199,12 @@ amdgpu_bo_list_get(struct amdgpu_fpriv *fpriv, int id)
 	result = idr_find(&fpriv->bo_list_handles, id);
 
 	if (result) {
-		if (kref_get_unless_zero(&result->refcount)) {
-			rcu_read_unlock();
+		if (kref_get_unless_zero(&result->refcount))
 			mutex_lock(&result->lock);
-		} else {
-			rcu_read_unlock();
+		else
 			result = NULL;
-		}
-	} else {
-		rcu_read_unlock();
 	}
+	rcu_read_unlock();
 
 	return result;
 }
@@ -270,7 +267,7 @@ int amdgpu_bo_list_ioctl(struct drm_device *dev, void *data,
 	struct amdgpu_fpriv *fpriv = filp->driver_priv;
 	union drm_amdgpu_bo_list *args = data;
 	uint32_t handle = args->in.list_handle;
-	const void __user *uptr = u64_to_user_ptr(args->in.bo_info_ptr);
+	const void __user *uptr = (const void*)(uintptr_t)args->in.bo_info_ptr;
 
 	struct drm_amdgpu_bo_list_entry *info;
 	struct amdgpu_bo_list *list;
@@ -278,7 +275,8 @@ int amdgpu_bo_list_ioctl(struct drm_device *dev, void *data,
 	int r;
 
 	info = kvmalloc_array(args->in.bo_number,
-			     sizeof(struct drm_amdgpu_bo_list_entry), GFP_KERNEL);
+			     sizeof(struct drm_amdgpu_bo_list_entry),
+                             GFP_KERNEL);
 	if (!info)
 		return -ENOMEM;
 

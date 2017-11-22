@@ -42,11 +42,6 @@
    this contains a helper + a amdgpu fb
    the helper contains a pointer to amdgpu framebuffer baseclass.
 */
-struct amdgpu_fbdev {
-	struct drm_fb_helper helper;
-	struct amdgpu_framebuffer rfb;
-	struct amdgpu_device *adev;
-};
 
 static int
 amdgpufb_open(struct fb_info *info, int user)
@@ -118,7 +113,7 @@ static void amdgpufb_destroy_pinned_object(struct drm_gem_object *gobj)
 		amdgpu_bo_unpin(abo);
 		amdgpu_bo_unreserve(abo);
 	}
-	drm_gem_object_put_unlocked(gobj);
+	drm_gem_object_unreference_unlocked(gobj);
 }
 
 static int amdgpufb_create_pinned_object(struct amdgpu_fbdev *rfbdev,
@@ -224,7 +219,7 @@ static int amdgpufb_create(struct drm_fb_helper *helper,
 	info = drm_fb_helper_alloc_fbi(helper);
 	if (IS_ERR(info)) {
 		ret = PTR_ERR(info);
-		goto out;
+		goto out_unref;
 	}
 
 	info->par = rfbdev;
@@ -233,7 +228,7 @@ static int amdgpufb_create(struct drm_fb_helper *helper,
 	ret = amdgpu_framebuffer_init(adev->ddev, &rfbdev->rfb, &mode_cmd, gobj);
 	if (ret) {
 		DRM_ERROR("failed to initialize framebuffer %d\n", ret);
-		goto out;
+		goto out_unref;
 	}
 
 	fb = &rfbdev->rfb.base;
@@ -245,12 +240,13 @@ static int amdgpufb_create(struct drm_fb_helper *helper,
 
 	drm_fb_helper_fill_fix(info, fb->pitches[0], fb->format->depth);
 
+	info->flags = FBINFO_DEFAULT | FBINFO_CAN_FORCE_OUTPUT;
 	info->fbops = &amdgpufb_ops;
 
 	tmp = amdgpu_bo_gpu_offset(abo) - adev->mc.vram_start;
 	info->fix.smem_start = adev->mc.aper_base + tmp;
 	info->fix.smem_len = amdgpu_bo_size(abo);
-	info->screen_base = amdgpu_bo_kptr(abo);
+	info->screen_base = abo->kptr;
 	info->screen_size = amdgpu_bo_size(abo);
 
 	drm_fb_helper_fill_var(info, &rfbdev->helper, sizes->fb_width, sizes->fb_height);
@@ -263,7 +259,7 @@ static int amdgpufb_create(struct drm_fb_helper *helper,
 
 	if (info->screen_base == NULL) {
 		ret = -ENOSPC;
-		goto out;
+		goto out_unref;
 	}
 
 	DRM_INFO("fb mappable at 0x%lX\n",  info->fix.smem_start);
@@ -275,12 +271,12 @@ static int amdgpufb_create(struct drm_fb_helper *helper,
 	vga_switcheroo_client_fb_set(adev->ddev->pdev, info);
 	return 0;
 
-out:
+out_unref:
 	if (abo) {
 
 	}
 	if (fb && ret) {
-		drm_gem_object_put_unlocked(gobj);
+		drm_gem_object_unreference_unlocked(gobj);
 		drm_framebuffer_unregister_private(fb);
 		drm_framebuffer_cleanup(fb);
 		kfree(fb);
@@ -353,7 +349,8 @@ int amdgpu_fbdev_init(struct amdgpu_device *adev)
 	drm_fb_helper_single_add_all_connectors(&rfbdev->helper);
 
 	/* disable all the possible outputs/crtcs before entering KMS mode */
-	drm_helper_disable_unused_functions(adev->ddev);
+	if (!amdgpu_device_has_dc_support(adev))
+		drm_helper_disable_unused_functions(adev->ddev);
 
 	drm_fb_helper_initial_config(&rfbdev->helper, bpp_sel);
 	return 0;

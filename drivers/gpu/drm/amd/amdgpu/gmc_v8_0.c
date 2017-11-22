@@ -21,10 +21,11 @@
  *
  */
 #include <linux/firmware.h>
-#include <drm/drmP.h>
+#include "drmP.h"
 #include "amdgpu.h"
 #include "gmc_v8_0.h"
 #include "amdgpu_ucode.h"
+#include "amdgpu_amdkfd.h"
 
 #include "gmc/gmc_8_1_d.h"
 #include "gmc/gmc_8_1_sh_mask.h"
@@ -34,9 +35,6 @@
 
 #include "oss/oss_3_0_d.h"
 #include "oss/oss_3_0_sh_mask.h"
-
-#include "dce/dce_10_0_d.h"
-#include "dce/dce_10_0_sh_mask.h"
 
 #include "vid.h"
 #include "vi.h"
@@ -399,10 +397,7 @@ static int gmc_v8_0_polaris_mc_load_microcode(struct amdgpu_device *adev)
 static void gmc_v8_0_vram_gtt_location(struct amdgpu_device *adev,
 				       struct amdgpu_mc *mc)
 {
-	u64 base = 0;
-
-	if (!amdgpu_sriov_vf(adev))
-		base = RREG32(mmMC_VM_FB_LOCATION) & 0xFFFF;
+	u64 base = RREG32(mmMC_VM_FB_LOCATION) & 0xFFFF;
 	base <<= 24;
 
 	if (mc->mc_vram_size > 0xFFC0000000ULL) {
@@ -441,17 +436,6 @@ static void gmc_v8_0_mc_program(struct amdgpu_device *adev)
 	if (gmc_v8_0_wait_for_idle((void *)adev)) {
 		dev_warn(adev->dev, "Wait for MC idle timedout !\n");
 	}
-	if (adev->mode_info.num_crtc) {
-		/* Lockout access through VGA aperture*/
-		tmp = RREG32(mmVGA_HDP_CONTROL);
-		tmp = REG_SET_FIELD(tmp, VGA_HDP_CONTROL, VGA_MEMORY_DISABLE, 1);
-		WREG32(mmVGA_HDP_CONTROL, tmp);
-
-		/* disable VGA render */
-		tmp = RREG32(mmVGA_RENDER_CONTROL);
-		tmp = REG_SET_FIELD(tmp, VGA_RENDER_CONTROL, VGA_VSTATUS_CNTL, 0);
-		WREG32(mmVGA_RENDER_CONTROL, tmp);
-	}
 	/* Update configuration */
 	WREG32(mmMC_VM_SYSTEM_APERTURE_LOW_ADDR,
 	       adev->mc.vram_start >> 12);
@@ -459,17 +443,6 @@ static void gmc_v8_0_mc_program(struct amdgpu_device *adev)
 	       adev->mc.vram_end >> 12);
 	WREG32(mmMC_VM_SYSTEM_APERTURE_DEFAULT_ADDR,
 	       adev->vram_scratch.gpu_addr >> 12);
-
-	if (amdgpu_sriov_vf(adev)) {
-		tmp = ((adev->mc.vram_end >> 24) & 0xFFFF) << 16;
-		tmp |= ((adev->mc.vram_start >> 24) & 0xFFFF);
-		WREG32(mmMC_VM_FB_LOCATION, tmp);
-		/* XXX double check these! */
-		WREG32(mmHDP_NONSURFACE_BASE, (adev->mc.vram_start >> 8));
-		WREG32(mmHDP_NONSURFACE_INFO, (2 << 7) | (1 << 30));
-		WREG32(mmHDP_NONSURFACE_SIZE, 0x3FFFFFFF);
-	}
-
 	WREG32(mmMC_VM_AGP_BASE, 0);
 	WREG32(mmMC_VM_AGP_TOP, 0x0FFFFFFF);
 	WREG32(mmMC_VM_AGP_BOT, 0x0FFFFFFF);
@@ -542,6 +515,11 @@ static int gmc_v8_0_mc_init(struct amdgpu_device *adev)
 			break;
 		}
 		adev->mc.vram_width = numchan * chansize;
+		/* FIXME: The above calculation is outdated.
+		 * For HBM provide a temporary fix
+		 */
+		if (adev->mc.vram_type == AMDGPU_VRAM_TYPE_HBM)
+			adev->mc.vram_width = AMDGPU_VRAM_TYPE_HBM_WIDTH;
 	}
 	/* Could aper size report 0 ? */
 	adev->mc.aper_base = pci_resource_start(adev->pdev, 0);
@@ -562,26 +540,7 @@ static int gmc_v8_0_mc_init(struct amdgpu_device *adev)
 	if (adev->mc.visible_vram_size > adev->mc.real_vram_size)
 		adev->mc.visible_vram_size = adev->mc.real_vram_size;
 
-	/* set the gart size */
-	if (amdgpu_gart_size == -1) {
-		switch (adev->asic_type) {
-		case CHIP_POLARIS11: /* all engines support GPUVM */
-		case CHIP_POLARIS10: /* all engines support GPUVM */
-		case CHIP_POLARIS12: /* all engines support GPUVM */
-		default:
-			adev->mc.gart_size = 256ULL << 20;
-			break;
-		case CHIP_TONGA:   /* UVD, VCE do not support GPUVM */
-		case CHIP_FIJI:    /* UVD, VCE do not support GPUVM */
-		case CHIP_CARRIZO: /* UVD, VCE do not support GPUVM, DCE SG support */
-		case CHIP_STONEY:  /* UVD does not support GPUVM, DCE SG support */
-			adev->mc.gart_size = 1024ULL << 20;
-			break;
-		}
-	} else {
-		adev->mc.gart_size = (u64)amdgpu_gart_size << 20;
-	}
-
+	amdgpu_gart_set_defaults(adev);
 	gmc_v8_0_vram_gtt_location(adev, &adev->mc);
 
 	return 0;
@@ -961,13 +920,16 @@ static void gmc_v8_0_gart_fini(struct amdgpu_device *adev)
  * @adev: amdgpu_device pointer
  * @status: VM_CONTEXT1_PROTECTION_FAULT_STATUS register value
  * @addr: VM_CONTEXT1_PROTECTION_FAULT_ADDR register value
+ * @mc_client: VM_CONTEXT1_PROTECTION_FAULT_MCCLIENT register value
+ * @src_id: interrupt source id
  *
- * Print human readable fault information (CIK).
+ * Print human readable fault information (VI).
  */
 static void gmc_v8_0_vm_decode_fault(struct amdgpu_device *adev,
 				     u32 status, u32 addr, u32 mc_client)
 {
 	u32 mc_id;
+	struct kfd_vm_fault_info *info = adev->mc.vm_fault_info;
 	u32 vmid = REG_GET_FIELD(status, VM_CONTEXT1_PROTECTION_FAULT_STATUS, VMID);
 	u32 protections = REG_GET_FIELD(status, VM_CONTEXT1_PROTECTION_FAULT_STATUS,
 					PROTECTIONS);
@@ -982,6 +944,19 @@ static void gmc_v8_0_vm_decode_fault(struct amdgpu_device *adev,
 	       REG_GET_FIELD(status, VM_CONTEXT1_PROTECTION_FAULT_STATUS,
 			     MEMORY_CLIENT_RW) ?
 	       "write" : "read", block, mc_client, mc_id);
+
+	if (amdgpu_amdkfd_is_kfd_vmid(adev, vmid)
+		&& !atomic_read(&adev->mc.vm_fault_info_updated)) {
+		info->vmid = vmid;
+		info->mc_id = mc_id;
+		info->page_addr = addr;
+		info->prot_valid = protections & 0x7 ? true : false;
+		info->prot_read = protections & 0x8 ? true : false;
+		info->prot_write = protections & 0x10 ? true : false;
+		info->prot_exec = protections & 0x20 ? true : false;
+		mb();
+		atomic_set(&adev->mc.vm_fault_info_updated, 1);
+	}
 }
 
 static int gmc_v8_0_convert_vram_type(int mc_seq_vram_type)
@@ -1136,6 +1111,12 @@ static int gmc_v8_0_sw_init(void *handle)
 		adev->vm_manager.vram_base_offset = 0;
 	}
 
+	adev->mc.vm_fault_info = kmalloc(sizeof(struct kfd_vm_fault_info),
+					GFP_KERNEL);
+	if (!adev->mc.vm_fault_info)
+		return -ENOMEM;
+	atomic_set(&adev->mc.vm_fault_info_updated, 0);
+
 	return 0;
 }
 
@@ -1144,6 +1125,7 @@ static int gmc_v8_0_sw_fini(void *handle)
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	amdgpu_vm_manager_fini(adev);
+	kfree(adev->mc.vm_fault_info);
 	gmc_v8_0_gart_fini(adev);
 	amdgpu_gem_force_release(adev);
 	amdgpu_bo_fini(adev);

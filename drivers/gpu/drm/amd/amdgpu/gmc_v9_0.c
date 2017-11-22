@@ -29,8 +29,6 @@
 #include "vega10/HDP/hdp_4_0_offset.h"
 #include "vega10/HDP/hdp_4_0_sh_mask.h"
 #include "vega10/GC/gc_9_0_sh_mask.h"
-#include "vega10/DC/dce_12_0_offset.h"
-#include "vega10/DC/dce_12_0_sh_mask.h"
 #include "vega10/vega10_enum.h"
 
 #include "soc15_common.h"
@@ -499,21 +497,7 @@ static int gmc_v9_0_mc_init(struct amdgpu_device *adev)
 	if (adev->mc.visible_vram_size > adev->mc.real_vram_size)
 		adev->mc.visible_vram_size = adev->mc.real_vram_size;
 
-	/* set the gart size */
-	if (amdgpu_gart_size == -1) {
-		switch (adev->asic_type) {
-		case CHIP_VEGA10:  /* all engines support GPUVM */
-		default:
-			adev->mc.gart_size = 256ULL << 20;
-			break;
-		case CHIP_RAVEN:   /* DCE SG support */
-			adev->mc.gart_size = 1024ULL << 20;
-			break;
-		}
-	} else {
-		adev->mc.gart_size = (u64)amdgpu_gart_size << 20;
-	}
-
+	amdgpu_gart_set_defaults(adev);
 	gmc_v9_0_vram_gtt_location(adev, &adev->mc);
 
 	return 0;
@@ -768,20 +752,6 @@ static int gmc_v9_0_hw_init(void *handle)
 
 	/* The sequence of these two function calls matters.*/
 	gmc_v9_0_init_golden_registers(adev);
-
-	if (adev->mode_info.num_crtc) {
-		u32 tmp;
-
-		/* Lockout access through VGA aperture*/
-		tmp = RREG32_SOC15(DCE, 0, mmVGA_HDP_CONTROL);
-		tmp = REG_SET_FIELD(tmp, VGA_HDP_CONTROL, VGA_MEMORY_DISABLE, 1);
-		WREG32_SOC15(DCE, 0, mmVGA_HDP_CONTROL, tmp);
-
-		/* disable VGA render */
-		tmp = RREG32_SOC15(DCE, 0, mmVGA_RENDER_CONTROL);
-		tmp = REG_SET_FIELD(tmp, VGA_RENDER_CONTROL, VGA_VSTATUS_CNTL, 0);
-		WREG32_SOC15(DCE, 0, mmVGA_RENDER_CONTROL, tmp);
-	}
 
 	r = gmc_v9_0_gart_enable(adev);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Advanced Micro Devices, Inc.
+ * Copyright 2017 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -20,16 +20,14 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  *
  */
+#ifndef __AMDGPU_DISPLAY_H__
+#define __AMDGPU_DISPLAY_H__
 
-#ifndef __GFX_V9_0_H__
-#define __GFX_V9_0_H__
+struct drm_framebuffer *
+amdgpu_user_framebuffer_create(struct drm_device *dev,
+						       struct drm_file *file_priv,
+							   const struct drm_mode_fb_cmd2 *mode_cmd);
 
-extern const struct amd_ip_funcs gfx_v9_0_ip_funcs;
-extern const struct amdgpu_ip_block_version gfx_v9_0_ip_block;
-
-void gfx_v9_0_select_se_sh(struct amdgpu_device *adev, u32 se_num, u32 sh_num);
-
-uint64_t gfx_v9_0_get_gpu_clock_counter(struct amdgpu_device *adev);
-int gfx_v9_0_get_cu_info(struct amdgpu_device *adev, struct amdgpu_cu_info *cu_info);
+void amdgpu_output_poll_changed(struct drm_device *dev);
 
 #endif

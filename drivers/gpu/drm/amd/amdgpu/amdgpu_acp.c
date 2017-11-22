@@ -320,25 +320,21 @@ static int acp_hw_init(void *handle)
 		return -ENOMEM;
 	}
 
-	switch (adev->asic_type) {
-	case CHIP_STONEY:
+	if (adev->asic_type == CHIP_STONEY) {
 		i2s_pdata[0].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET |
 			DW_I2S_QUIRK_16BIT_IDX_OVERRIDE;
-		break;
-	default:
+	} else {
 		i2s_pdata[0].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET;
 	}
 	i2s_pdata[0].cap = DWC_I2S_PLAY;
 	i2s_pdata[0].snd_rates = SNDRV_PCM_RATE_8000_96000;
 	i2s_pdata[0].i2s_reg_comp1 = ACP_I2S_COMP1_PLAY_REG_OFFSET;
 	i2s_pdata[0].i2s_reg_comp2 = ACP_I2S_COMP2_PLAY_REG_OFFSET;
-	switch (adev->asic_type) {
-	case CHIP_STONEY:
+	if (adev->asic_type == CHIP_STONEY) {
 		i2s_pdata[1].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET |
 			DW_I2S_QUIRK_COMP_PARAM1 |
 			DW_I2S_QUIRK_16BIT_IDX_OVERRIDE;
-		break;
-	default:
+	} else {
 		i2s_pdata[1].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET |
 			DW_I2S_QUIRK_COMP_PARAM1;
 	}
@@ -371,6 +367,8 @@ static int acp_hw_init(void *handle)
 	adev->acp.acp_cell[0].name = "acp_audio_dma";
 	adev->acp.acp_cell[0].num_resources = 4;
 	adev->acp.acp_cell[0].resources = &adev->acp.acp_res[0];
+	adev->acp.acp_cell[0].platform_data = &adev->asic_type;
+	adev->acp.acp_cell[0].pdata_size = sizeof(adev->asic_type);
 
 	adev->acp.acp_cell[1].name = "designware-i2s";
 	adev->acp.acp_cell[1].num_resources = 1;
@@ -416,22 +414,20 @@ static int acp_hw_fini(void *handle)
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	/* return early if no ACP */
-	if (!adev->acp.acp_cell)
+	if (!adev->acp.acp_genpd)
 		return 0;
 
-	if (adev->acp.acp_genpd) {
-		for (i = 0; i < ACP_DEVS ; i++) {
-			dev = get_mfd_cell_dev(adev->acp.acp_cell[i].name, i);
-			ret = pm_genpd_remove_device(&adev->acp.acp_genpd->gpd, dev);
-			/* If removal fails, dont giveup and try rest */
-			if (ret)
-				dev_err(dev, "remove dev from genpd failed\n");
-		}
-		kfree(adev->acp.acp_genpd);
+	for (i = 0; i < ACP_DEVS ; i++) {
+		dev = get_mfd_cell_dev(adev->acp.acp_cell[i].name, i);
+		ret = pm_genpd_remove_device(&adev->acp.acp_genpd->gpd, dev);
+		/* If removal fails, dont giveup and try rest */
+		if (ret)
+			dev_err(dev, "remove dev from genpd failed\n");
 	}
 
 	mfd_remove_devices(adev->acp.parent);
 	kfree(adev->acp.acp_res);
+	kfree(adev->acp.acp_genpd);
 	kfree(adev->acp.acp_cell);
 
 	return 0;

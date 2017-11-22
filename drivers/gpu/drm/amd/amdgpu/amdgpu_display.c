@@ -86,7 +86,7 @@ static void amdgpu_flip_work_func(struct work_struct *__work)
 	 * targeted by the flip
 	 */
 	if (amdgpu_crtc->enabled &&
-	    (amdgpu_get_crtc_scanoutpos(adev->ddev, work->crtc_id, 0,
+	    (amdgpu_get_crtc_scanoutpos(adev->ddev, work->crtc_id, false,
 					&vpos, &hpos, NULL, NULL,
 					&crtc->hwmode)
 	     & (DRM_SCANOUTPOS_VALID | DRM_SCANOUTPOS_IN_VBLANK)) ==
@@ -142,7 +142,8 @@ int amdgpu_crtc_page_flip_target(struct drm_crtc *crtc,
 				 struct drm_framebuffer *fb,
 				 struct drm_pending_vblank_event *event,
 				 uint32_t page_flip_flags, uint32_t target,
-				 struct drm_modeset_acquire_ctx *ctx)
+                                 struct drm_modeset_acquire_ctx *ctx)
+
 {
 	struct drm_device *dev = crtc->dev;
 	struct amdgpu_device *adev = dev->dev_private;
@@ -180,6 +181,12 @@ int amdgpu_crtc_page_flip_target(struct drm_crtc *crtc,
 	new_amdgpu_fb = to_amdgpu_framebuffer(fb);
 	obj = new_amdgpu_fb->obj;
 	new_abo = gem_to_amdgpu_bo(obj);
+
+	if (amdgpu_ttm_adev(new_abo->tbo.bdev) != adev) {
+		DRM_ERROR("Foreign BOs not allowed in the display engine\n");
+		r = -EINVAL;
+		goto cleanup;
+	}
 
 	/* pin the new buffer */
 	r = amdgpu_bo_reserve(new_abo, false);
@@ -254,7 +261,8 @@ cleanup:
 }
 
 int amdgpu_crtc_set_config(struct drm_mode_set *set,
-			   struct drm_modeset_acquire_ctx *ctx)
+                           struct drm_modeset_acquire_ctx *ctx)
+
 {
 	struct drm_device *dev;
 	struct amdgpu_device *adev;
@@ -271,7 +279,7 @@ int amdgpu_crtc_set_config(struct drm_mode_set *set,
 	if (ret < 0)
 		return ret;
 
-	ret = drm_crtc_helper_set_config(set, ctx);
+	ret = drm_crtc_helper_set_config(set,ctx);
 
 	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head)
 		if (crtc->enabled)
@@ -482,7 +490,7 @@ static void amdgpu_user_framebuffer_destroy(struct drm_framebuffer *fb)
 {
 	struct amdgpu_framebuffer *amdgpu_fb = to_amdgpu_framebuffer(fb);
 
-	drm_gem_object_put_unlocked(amdgpu_fb->obj);
+	drm_gem_object_unreference_unlocked(amdgpu_fb->obj);
 	drm_framebuffer_cleanup(fb);
 	kfree(amdgpu_fb);
 }
@@ -518,7 +526,7 @@ amdgpu_framebuffer_init(struct drm_device *dev,
 	return 0;
 }
 
-static struct drm_framebuffer *
+struct drm_framebuffer *
 amdgpu_user_framebuffer_create(struct drm_device *dev,
 			       struct drm_file *file_priv,
 			       const struct drm_mode_fb_cmd2 *mode_cmd)
@@ -542,21 +550,21 @@ amdgpu_user_framebuffer_create(struct drm_device *dev,
 
 	amdgpu_fb = kzalloc(sizeof(*amdgpu_fb), GFP_KERNEL);
 	if (amdgpu_fb == NULL) {
-		drm_gem_object_put_unlocked(obj);
+		drm_gem_object_unreference_unlocked(obj);
 		return ERR_PTR(-ENOMEM);
 	}
 
 	ret = amdgpu_framebuffer_init(dev, amdgpu_fb, mode_cmd, obj);
 	if (ret) {
 		kfree(amdgpu_fb);
-		drm_gem_object_put_unlocked(obj);
+		drm_gem_object_unreference_unlocked(obj);
 		return ERR_PTR(ret);
 	}
 
 	return &amdgpu_fb->base;
 }
 
-static void amdgpu_output_poll_changed(struct drm_device *dev)
+void amdgpu_output_poll_changed(struct drm_device *dev)
 {
 	struct amdgpu_device *adev = dev->dev_private;
 	amdgpu_fb_output_poll_changed(adev);
@@ -630,6 +638,19 @@ int amdgpu_modeset_create_props(struct amdgpu_device *adev)
 		drm_property_create_enum(adev->ddev, 0,
 					 "dither",
 					 amdgpu_dither_enum_list, sz);
+
+	if (amdgpu_device_has_dc_support(adev)) {
+		adev->mode_info.freesync_property =
+			drm_property_create_bool(adev->ddev, 0, "freesync");
+		if (!adev->mode_info.freesync_property)
+			return -ENOMEM;
+		adev->mode_info.freesync_capable_property =
+			drm_property_create_bool(adev->ddev,
+						 DRM_MODE_PROP_IMMUTABLE,
+						 "freesync_capable");
+		if (!adev->mode_info.freesync_capable_property)
+			return -ENOMEM;
+	}
 
 	return 0;
 }
@@ -769,10 +790,10 @@ bool amdgpu_crtc_scaling_mode_fixup(struct drm_crtc *crtc,
  * unknown small number of scanlines wrt. real scanout position.
  *
  */
-int amdgpu_get_crtc_scanoutpos(struct drm_device *dev, unsigned int pipe,
-			       unsigned int flags, int *vpos, int *hpos,
-			       ktime_t *stime, ktime_t *etime,
-			       const struct drm_display_mode *mode)
+bool amdgpu_get_crtc_scanoutpos(struct drm_device *dev, unsigned int pipe,
+			               bool flags, int *vpos, int *hpos,
+			               ktime_t *stime, ktime_t *etime,
+			               const struct drm_display_mode *mode)
 {
 	u32 vbl = 0, position = 0;
 	int vbl_start, vbl_end, vtotal, ret = 0;
@@ -886,3 +907,18 @@ int amdgpu_crtc_idx_to_irq_type(struct amdgpu_device *adev, int crtc)
 		return AMDGPU_CRTC_IRQ_NONE;
 	}
 }
+
+int amdgpu_freesync_ioctl(struct drm_device *dev, void *data,
+			    struct drm_file *filp)
+{
+	int ret = -EPERM;
+	struct amdgpu_device *adev = dev->dev_private;
+
+	if (adev->mode_info.funcs->notify_freesync)
+		ret = adev->mode_info.funcs->notify_freesync(dev,data,filp);
+	else
+		DRM_DEBUG("amdgpu no notify_freesync ioctl\n");
+
+	return ret;
+}
+

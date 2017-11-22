@@ -250,7 +250,6 @@
 #define	PACKET3_SET_UCONFIG_REG				0x79
 #define		PACKET3_SET_UCONFIG_REG_START			0x0000c000
 #define		PACKET3_SET_UCONFIG_REG_END			0x0000c400
-#define		PACKET3_SET_UCONFIG_REG_INDEX_TYPE		(2 << 28)
 #define	PACKET3_SCRATCH_RAM_WRITE			0x7D
 #define	PACKET3_SCRATCH_RAM_READ			0x7E
 #define	PACKET3_LOAD_CONST_RAM				0x80
@@ -268,6 +267,10 @@
 			 * x=1: tmz_end
 			 */
 
+#define	PACKET3_INVALIDATE_TLBS				0x98
+#              define PACKET3_INVALIDATE_TLBS_DST_SEL(x)     ((x) << 0)
+#              define PACKET3_INVALIDATE_TLBS_ALL_HUB(x)     ((x) << 4)
+#              define PACKET3_INVALIDATE_TLBS_PASID(x)       ((x) << 5)
 #define PACKET3_SET_RESOURCES				0xA0
 /* 1. header
  * 2. CONTROL

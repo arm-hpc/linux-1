@@ -20,7 +20,7 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  *
  */
-#include <drm/drmP.h>
+#include "drmP.h"
 #include "amdgpu.h"
 #include "amdgpu_pm.h"
 #include "amdgpu_i2c.h"
@@ -469,7 +469,7 @@ static u32 dce_v11_0_hpd_get_gpio_reg(struct amdgpu_device *adev)
 	return mmDC_GPIO_HPD_A;
 }
 
-static bool dce_v11_0_is_display_hung(struct amdgpu_device *adev)
+bool dce_v11_0_is_display_hung(struct amdgpu_device *adev)
 {
 	u32 crtc_hung = 0;
 	u32 crtc_status[6];
@@ -2178,7 +2178,6 @@ static void dce_v11_0_crtc_load_lut(struct drm_crtc *crtc)
 	struct amdgpu_crtc *amdgpu_crtc = to_amdgpu_crtc(crtc);
 	struct drm_device *dev = crtc->dev;
 	struct amdgpu_device *adev = dev->dev_private;
-	u16 *r, *g, *b;
 	int i;
 	u32 tmp;
 
@@ -2210,14 +2209,11 @@ static void dce_v11_0_crtc_load_lut(struct drm_crtc *crtc)
 	WREG32(mmDC_LUT_WRITE_EN_MASK + amdgpu_crtc->crtc_offset, 0x00000007);
 
 	WREG32(mmDC_LUT_RW_INDEX + amdgpu_crtc->crtc_offset, 0);
-	r = crtc->gamma_store;
-	g = r + crtc->gamma_size;
-	b = g + crtc->gamma_size;
 	for (i = 0; i < 256; i++) {
 		WREG32(mmDC_LUT_30_COLOR + amdgpu_crtc->crtc_offset,
-		       ((*r++ & 0xffc0) << 14) |
-		       ((*g++ & 0xffc0) << 4) |
-		       (*b++ >> 6));
+		       (amdgpu_crtc->lut_r[i] << 20) |
+		       (amdgpu_crtc->lut_g[i] << 10) |
+		       (amdgpu_crtc->lut_b[i] << 0));
 	}
 
 	tmp = RREG32(mmDEGAMMA_CONTROL + amdgpu_crtc->crtc_offset);
@@ -2506,7 +2502,7 @@ static int dce_v11_0_crtc_cursor_set2(struct drm_crtc *crtc,
 	aobj = gem_to_amdgpu_bo(obj);
 	ret = amdgpu_bo_reserve(aobj, false);
 	if (ret != 0) {
-		drm_gem_object_put_unlocked(obj);
+		drm_gem_object_unreference_unlocked(obj);
 		return ret;
 	}
 
@@ -2514,7 +2510,7 @@ static int dce_v11_0_crtc_cursor_set2(struct drm_crtc *crtc,
 	amdgpu_bo_unreserve(aobj);
 	if (ret) {
 		DRM_ERROR("Failed to pin new cursor BO (%d)\n", ret);
-		drm_gem_object_put_unlocked(obj);
+		drm_gem_object_unreference_unlocked(obj);
 		return ret;
 	}
 
@@ -2548,7 +2544,7 @@ unpin:
 			amdgpu_bo_unpin(aobj);
 			amdgpu_bo_unreserve(aobj);
 		}
-		drm_gem_object_put_unlocked(amdgpu_crtc->cursor_bo);
+		drm_gem_object_unreference_unlocked(amdgpu_crtc->cursor_bo);
 	}
 
 	amdgpu_crtc->cursor_bo = obj;
@@ -2573,8 +2569,17 @@ static void dce_v11_0_cursor_reset(struct drm_crtc *crtc)
 
 static int dce_v11_0_crtc_gamma_set(struct drm_crtc *crtc, u16 *red, u16 *green,
 				    u16 *blue, uint32_t size,
-				    struct drm_modeset_acquire_ctx *ctx)
+                                    struct drm_modeset_acquire_ctx *ctx)
 {
+	struct amdgpu_crtc *amdgpu_crtc = to_amdgpu_crtc(crtc);
+	int i;
+
+	/* userspace palettes are always correct as is */
+	for (i = 0; i < size; i++) {
+		amdgpu_crtc->lut_r[i] = red[i] >> 6;
+		amdgpu_crtc->lut_g[i] = green[i] >> 6;
+		amdgpu_crtc->lut_b[i] = blue[i] >> 6;
+	}
 	dce_v11_0_crtc_load_lut(crtc);
 
 	return 0;
@@ -2820,6 +2825,7 @@ static const struct drm_crtc_helper_funcs dce_v11_0_crtc_helper_funcs = {
 static int dce_v11_0_crtc_init(struct amdgpu_device *adev, int index)
 {
 	struct amdgpu_crtc *amdgpu_crtc;
+	int i;
 
 	amdgpu_crtc = kzalloc(sizeof(struct amdgpu_crtc) +
 			      (AMDGPUFB_CONN_LIMIT * sizeof(struct drm_connector *)), GFP_KERNEL);
@@ -2836,6 +2842,12 @@ static int dce_v11_0_crtc_init(struct amdgpu_device *adev, int index)
 	amdgpu_crtc->max_cursor_height = 128;
 	adev->ddev->mode_config.cursor_width = amdgpu_crtc->max_cursor_width;
 	adev->ddev->mode_config.cursor_height = amdgpu_crtc->max_cursor_height;
+
+	for (i = 0; i < 256; i++) {
+		amdgpu_crtc->lut_r[i] = i << 2;
+		amdgpu_crtc->lut_g[i] = i << 2;
+		amdgpu_crtc->lut_b[i] = i << 2;
+	}
 
 	switch (amdgpu_crtc->crtc_id) {
 	case 0:

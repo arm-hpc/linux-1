@@ -21,12 +21,13 @@
  *
  */
 #include <linux/firmware.h>
-#include <drm/drmP.h>
+#include "drmP.h"
 #include "amdgpu.h"
 #include "cikd.h"
 #include "cik.h"
 #include "gmc_v7_0.h"
 #include "amdgpu_ucode.h"
+#include "amdgpu_amdkfd.h"
 
 #include "bif/bif_4_1_d.h"
 #include "bif/bif_4_1_sh_mask.h"
@@ -36,9 +37,6 @@
 
 #include "oss/oss_2_0_d.h"
 #include "oss/oss_2_0_sh_mask.h"
-
-#include "dce/dce_8_0_d.h"
-#include "dce/dce_8_0_sh_mask.h"
 
 #include "amdgpu_atombios.h"
 
@@ -276,17 +274,6 @@ static void gmc_v7_0_mc_program(struct amdgpu_device *adev)
 	if (gmc_v7_0_wait_for_idle((void *)adev)) {
 		dev_warn(adev->dev, "Wait for MC idle timedout !\n");
 	}
-	if (adev->mode_info.num_crtc) {
-		/* Lockout access through VGA aperture*/
-		tmp = RREG32(mmVGA_HDP_CONTROL);
-		tmp = REG_SET_FIELD(tmp, VGA_HDP_CONTROL, VGA_MEMORY_DISABLE, 1);
-		WREG32(mmVGA_HDP_CONTROL, tmp);
-
-		/* disable VGA render */
-		tmp = RREG32(mmVGA_RENDER_CONTROL);
-		tmp = REG_SET_FIELD(tmp, VGA_RENDER_CONTROL, VGA_VSTATUS_CNTL, 0);
-		WREG32(mmVGA_RENDER_CONTROL, tmp);
-	}
 	/* Update configuration */
 	WREG32(mmMC_VM_SYSTEM_APERTURE_LOW_ADDR,
 	       adev->mc.vram_start >> 12);
@@ -386,27 +373,7 @@ static int gmc_v7_0_mc_init(struct amdgpu_device *adev)
 	if (adev->mc.visible_vram_size > adev->mc.real_vram_size)
 		adev->mc.visible_vram_size = adev->mc.real_vram_size;
 
-	/* set the gart size */
-	if (amdgpu_gart_size == -1) {
-		switch (adev->asic_type) {
-		case CHIP_TOPAZ:     /* no MM engines */
-		default:
-			adev->mc.gart_size = 256ULL << 20;
-			break;
-#ifdef CONFIG_DRM_AMDGPU_CIK
-		case CHIP_BONAIRE: /* UVD, VCE do not support GPUVM */
-		case CHIP_HAWAII:  /* UVD, VCE do not support GPUVM */
-		case CHIP_KAVERI:  /* UVD, VCE do not support GPUVM */
-		case CHIP_KABINI:  /* UVD, VCE do not support GPUVM */
-		case CHIP_MULLINS: /* UVD, VCE do not support GPUVM */
-			adev->mc.gart_size = 1024ULL << 20;
-			break;
-#endif
-		}
-	} else {
-		adev->mc.gart_size = (u64)amdgpu_gart_size << 20;
-	}
-
+	amdgpu_gart_set_defaults(adev);
 	gmc_v7_0_vram_gtt_location(adev, &adev->mc);
 
 	return 0;
@@ -745,6 +712,8 @@ static void gmc_v7_0_gart_fini(struct amdgpu_device *adev)
  * @adev: amdgpu_device pointer
  * @status: VM_CONTEXT1_PROTECTION_FAULT_STATUS register value
  * @addr: VM_CONTEXT1_PROTECTION_FAULT_ADDR register value
+ * @mc_client: VM_CONTEXT1_PROTECTION_FAULT_MCCLIENT register value
+ * @src_id: interrupt source id
  *
  * Print human readable fault information (CIK).
  */
@@ -752,6 +721,7 @@ static void gmc_v7_0_vm_decode_fault(struct amdgpu_device *adev,
 				     u32 status, u32 addr, u32 mc_client)
 {
 	u32 mc_id;
+	struct kfd_vm_fault_info *info = adev->mc.vm_fault_info;
 	u32 vmid = REG_GET_FIELD(status, VM_CONTEXT1_PROTECTION_FAULT_STATUS, VMID);
 	u32 protections = REG_GET_FIELD(status, VM_CONTEXT1_PROTECTION_FAULT_STATUS,
 					PROTECTIONS);
@@ -766,6 +736,19 @@ static void gmc_v7_0_vm_decode_fault(struct amdgpu_device *adev,
 	       REG_GET_FIELD(status, VM_CONTEXT1_PROTECTION_FAULT_STATUS,
 			     MEMORY_CLIENT_RW) ?
 	       "write" : "read", block, mc_client, mc_id);
+
+	if (amdgpu_amdkfd_is_kfd_vmid(adev, vmid)
+		&& !atomic_read(&adev->mc.vm_fault_info_updated)) {
+		info->vmid = vmid;
+		info->mc_id = mc_id;
+		info->page_addr = addr;
+		info->prot_valid = protections & 0x7 ? true : false;
+		info->prot_read = protections & 0x8 ? true : false;
+		info->prot_write = protections & 0x10 ? true : false;
+		info->prot_exec = protections & 0x20 ? true : false;
+		mb();
+		atomic_set(&adev->mc.vm_fault_info_updated, 1);
+	}
 }
 
 
@@ -1039,6 +1022,12 @@ static int gmc_v7_0_sw_init(void *handle)
 		adev->vm_manager.vram_base_offset = 0;
 	}
 
+	adev->mc.vm_fault_info = kmalloc(sizeof(struct kfd_vm_fault_info),
+					GFP_KERNEL);
+	if (!adev->mc.vm_fault_info)
+		return -ENOMEM;
+	atomic_set(&adev->mc.vm_fault_info_updated, 0);
+
 	return 0;
 }
 
@@ -1047,6 +1036,7 @@ static int gmc_v7_0_sw_fini(void *handle)
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	amdgpu_vm_manager_fini(adev);
+	kfree(adev->mc.vm_fault_info);
 	gmc_v7_0_gart_fini(adev);
 	amdgpu_gem_force_release(adev);
 	amdgpu_bo_fini(adev);

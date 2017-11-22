@@ -21,7 +21,7 @@
  *
  */
 #include <linux/firmware.h>
-#include <drm/drmP.h>
+#include "drmP.h"
 #include "amdgpu.h"
 #include "gmc_v6_0.h"
 #include "amdgpu_ucode.h"
@@ -249,19 +249,7 @@ static void gmc_v6_0_mc_program(struct amdgpu_device *adev)
 		dev_warn(adev->dev, "Wait for MC idle timedout !\n");
 	}
 
-	if (adev->mode_info.num_crtc) {
-		u32 tmp;
-
-		/* Lockout access through VGA aperture*/
-		tmp = RREG32(mmVGA_HDP_CONTROL);
-		tmp |= VGA_HDP_CONTROL__VGA_MEMORY_DISABLE_MASK;
-		WREG32(mmVGA_HDP_CONTROL, tmp);
-
-		/* disable VGA render */
-		tmp = RREG32(mmVGA_RENDER_CONTROL);
-		tmp &= ~VGA_VSTATUS_CNTL;
-		WREG32(mmVGA_RENDER_CONTROL, tmp);
-	}
+	WREG32(mmVGA_HDP_CONTROL, VGA_HDP_CONTROL__VGA_MEMORY_DISABLE_MASK);
 	/* Update configuration */
 	WREG32(mmMC_VM_SYSTEM_APERTURE_LOW_ADDR,
 	       adev->mc.vram_start >> 12);
@@ -332,24 +320,7 @@ static int gmc_v6_0_mc_init(struct amdgpu_device *adev)
 	adev->mc.real_vram_size = RREG32(mmCONFIG_MEMSIZE) * 1024ULL * 1024ULL;
 	adev->mc.visible_vram_size = adev->mc.aper_size;
 
-	/* set the gart size */
-	if (amdgpu_gart_size == -1) {
-		switch (adev->asic_type) {
-		case CHIP_HAINAN:    /* no MM engines */
-		default:
-			adev->mc.gart_size = 256ULL << 20;
-			break;
-		case CHIP_VERDE:    /* UVD, VCE do not support GPUVM */
-		case CHIP_TAHITI:   /* UVD, VCE do not support GPUVM */
-		case CHIP_PITCAIRN: /* UVD, VCE do not support GPUVM */
-		case CHIP_OLAND:    /* UVD, VCE do not support GPUVM */
-			adev->mc.gart_size = 1024ULL << 20;
-			break;
-		}
-	} else {
-		adev->mc.gart_size = (u64)amdgpu_gart_size << 20;
-	}
-
+	amdgpu_gart_set_defaults(adev);
 	gmc_v6_0_vram_gtt_location(adev, &adev->mc);
 
 	return 0;

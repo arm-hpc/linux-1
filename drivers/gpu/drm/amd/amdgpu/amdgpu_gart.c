@@ -27,9 +27,6 @@
  */
 #include <drm/drmP.h>
 #include <drm/amdgpu_drm.h>
-#ifdef CONFIG_X86
-#include <asm/set_memory.h>
-#endif
 #include "amdgpu.h"
 
 /*
@@ -55,6 +52,18 @@
 /*
  * Common GART table functions.
  */
+
+/**
+ * amdgpu_gart_set_defaults - set the default gart_size
+ *
+ * @adev: amdgpu_device pointer
+ *
+ * Set the default gart_size based on parameters and available VRAM.
+ */
+void amdgpu_gart_set_defaults(struct amdgpu_device *adev)
+{
+	adev->mc.gart_size = (uint64_t)amdgpu_gart_size << 20;
+}
 
 /**
  * amdgpu_gart_table_ram_alloc - allocate system ram for gart page table
@@ -132,7 +141,7 @@ int amdgpu_gart_table_vram_alloc(struct amdgpu_device *adev)
 				     PAGE_SIZE, true, AMDGPU_GEM_DOMAIN_VRAM,
 				     AMDGPU_GEM_CREATE_CPU_ACCESS_REQUIRED |
 				     AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS,
-				     NULL, NULL, 0, &adev->gart.robj);
+				     NULL, NULL, &adev->gart.robj);
 		if (r) {
 			return r;
 		}

@@ -24,7 +24,7 @@
  */
 
 #include <linux/firmware.h>
-#include <drm/drmP.h>
+#include "drmP.h"
 #include "amdgpu.h"
 #include "amdgpu_psp.h"
 #include "amdgpu_ucode.h"
@@ -173,14 +173,18 @@ int psp_v3_1_bootloader_load_sysdrv(struct psp_context *psp)
 	 * are already been loaded.
 	 */
 	sol_reg = RREG32_SOC15(MP0, 0, mmMP0_SMN_C2PMSG_81);
-	if (sol_reg)
+	if (sol_reg) {
+                DRM_DEBUG("GREG , No sign of life\n");
 		return 0;
+        }
 
 	/* Wait for bootloader to signify that is ready having bit 31 of C2PMSG_35 set to 1 */
 	ret = psp_wait_for(psp, SOC15_REG_OFFSET(MP0, 0, mmMP0_SMN_C2PMSG_35),
 			   0x80000000, 0x80000000, false);
-	if (ret)
+	if (ret) {
+                DRM_DEBUG("GREG , bit 31 not set to 1 \n");
 		return ret;
+         }
 
 	memset(psp->fw_pri_buf, 0, PSP_1_MEG);
 
@@ -200,6 +204,9 @@ int psp_v3_1_bootloader_load_sysdrv(struct psp_context *psp)
 	ret = psp_wait_for(psp, SOC15_REG_OFFSET(MP0, 0, mmMP0_SMN_C2PMSG_35),
 			   0x80000000, 0x80000000, false);
 
+	if (ret) {
+                DRM_DEBUG("GREG , after mdelay(20) psp_wait_for is %d\n",ret);
+        }
 	return ret;
 }
 

@@ -36,11 +36,11 @@
 #include <linux/hashtable.h>
 #include <linux/dma-fence.h>
 
-#include <drm/ttm/ttm_bo_api.h>
-#include <drm/ttm/ttm_bo_driver.h>
-#include <drm/ttm/ttm_placement.h>
-#include <drm/ttm/ttm_module.h>
-#include <drm/ttm/ttm_execbuf_util.h>
+#include <ttm/ttm_bo_api.h>
+#include <ttm/ttm_bo_driver.h>
+#include <ttm/ttm_placement.h>
+#include <ttm/ttm_module.h>
+#include <ttm/ttm_execbuf_util.h>
 
 #include <drm/drmP.h>
 #include <drm/drm_gem.h>
@@ -65,6 +65,7 @@
 #include "amdgpu_uvd.h"
 #include "amdgpu_vce.h"
 #include "amdgpu_vcn.h"
+#include "amdgpu_dm.h"
 
 #include "gpu_scheduler.h"
 #include "amdgpu_virt.h"
@@ -76,7 +77,7 @@
 extern int amdgpu_modeset;
 extern int amdgpu_vram_limit;
 extern int amdgpu_vis_vram_limit;
-extern int amdgpu_gart_size;
+extern unsigned amdgpu_gart_size;
 extern int amdgpu_gtt_size;
 extern int amdgpu_moverate;
 extern int amdgpu_benchmarking;
@@ -100,6 +101,7 @@ extern int amdgpu_vm_fragment_size;
 extern int amdgpu_vm_fault_stop;
 extern int amdgpu_vm_debug;
 extern int amdgpu_vm_update_mode;
+extern int amdgpu_dc;
 extern int amdgpu_sched_jobs;
 extern int amdgpu_sched_hw_submission;
 extern int amdgpu_no_evict;
@@ -178,6 +180,7 @@ struct amdgpu_cs_parser;
 struct amdgpu_job;
 struct amdgpu_irq_src;
 struct amdgpu_fpriv;
+struct kfd_vm_fault_info;
 
 enum amdgpu_cp_irq {
 	AMDGPU_CP_IRQ_GFX_EOP = 0,
@@ -374,11 +377,90 @@ struct amdgpu_clock {
 };
 
 /*
- * GEM.
+ * BO.
  */
+struct amdgpu_bo_list_entry {
+	struct amdgpu_bo		*robj;
+	struct ttm_validate_buffer	tv;
+	struct amdgpu_bo_va		*bo_va;
+	uint32_t			priority;
+	struct page			**user_pages;
+	int				user_invalidated;
+};
+
+struct amdgpu_bo_va_mapping {
+	struct list_head		list;
+	struct rb_node			rb;
+	uint64_t			start;
+	uint64_t			last;
+	uint64_t			__subtree_last;
+	uint64_t			offset;
+	uint64_t			flags;
+};
+
+/* bo virtual addresses in a specific vm */
+struct amdgpu_bo_va {
+	/* protected by bo being reserved */
+	struct list_head		bo_list;
+	struct dma_fence	        *last_pt_update;
+	unsigned			ref_count;
+
+	/* protected by vm mutex and spinlock */
+	struct list_head		vm_status;
+
+	/* mappings for this bo_va */
+	struct list_head		invalids;
+	struct list_head		valids;
+
+	/* constant after initialization */
+	struct amdgpu_vm		*vm;
+	struct amdgpu_bo		*bo;
+};
 
 #define AMDGPU_GEM_DOMAIN_MAX		0x3
-#define gem_to_amdgpu_bo(gobj) container_of((gobj), struct amdgpu_bo, gem_base)
+
+struct amdgpu_gem_object {
+	struct drm_gem_object		base;
+	struct list_head		list;
+	struct amdgpu_bo		*bo;
+};
+
+struct kgd_mem;
+
+struct amdgpu_bo {
+	/* Protected by tbo.reserved */
+	u32				prefered_domains;
+	u32				allowed_domains;
+	struct ttm_place		placements[AMDGPU_GEM_DOMAIN_MAX + 1];
+	struct ttm_placement		placement;
+	struct ttm_buffer_object	tbo;
+	struct ttm_bo_kmap_obj		kmap;
+	u64				flags;
+	unsigned			pin_count;
+	void				*kptr;
+	u64				tiling_flags;
+	u64				metadata_flags;
+	void				*metadata;
+	u32				metadata_size;
+	unsigned			prime_shared_count;
+	/* GEM objects refereing to this BO */
+	struct list_head	gem_objects;
+
+	/* list of all virtual address to which this bo
+	 * is associated to
+	 */
+	struct list_head		va;
+	/* Constant after initialization */
+	struct amdgpu_bo		*parent;
+	struct amdgpu_bo		*shadow;
+
+	struct ttm_bo_kmap_obj		dma_buf_vmap;
+	struct amdgpu_mn		*mn;
+	struct list_head		mn_list;
+	struct list_head		shadow_list;
+	struct kgd_mem			*kfd_bo;
+};
+#define gem_to_amdgpu_bo(gobj) container_of((gobj), struct amdgpu_gem_object, base)->bo
 
 void amdgpu_gem_object_free(struct drm_gem_object *obj);
 int amdgpu_gem_object_open(struct drm_gem_object *obj,
@@ -394,6 +476,10 @@ amdgpu_gem_prime_import_sg_table(struct drm_device *dev,
 struct dma_buf *amdgpu_gem_prime_export(struct drm_device *dev,
 					struct drm_gem_object *gobj,
 					int flags);
+struct drm_gem_object *
+amdgpu_gem_prime_foreign_bo(struct amdgpu_device *adev, struct amdgpu_bo *bo);
+struct drm_gem_object *amdgpu_gem_prime_import(struct drm_device *dev,
+					       struct dma_buf *dma_buf);
 int amdgpu_gem_prime_pin(struct drm_gem_object *obj);
 void amdgpu_gem_prime_unpin(struct drm_gem_object *obj);
 struct reservation_object *amdgpu_gem_prime_res_obj(struct drm_gem_object *);
@@ -515,6 +601,8 @@ struct amdgpu_mc {
 	u64					private_aperture_end;
 	/* protects concurrent invalidation */
 	spinlock_t		invalidate_lock;
+	struct kfd_vm_fault_info *vm_fault_info;
+	atomic_t                vm_fault_info_updated;
 };
 
 /*
@@ -611,15 +699,15 @@ typedef enum _AMDGPU_DOORBELL64_ASSIGNMENT
 	/* overlap the doorbell assignment with VCN as they are  mutually exclusive
 	 * VCE engine's doorbell is 32 bit and two VCE ring share one QWORD
 	 */
-	AMDGPU_DOORBELL64_UVD_RING0_1             = 0xF8,
-	AMDGPU_DOORBELL64_UVD_RING2_3             = 0xF9,
-	AMDGPU_DOORBELL64_UVD_RING4_5             = 0xFA,
-	AMDGPU_DOORBELL64_UVD_RING6_7             = 0xFB,
+	AMDGPU_DOORBELL64_RING0_1                 = 0xF8,
+	AMDGPU_DOORBELL64_RING2_3                 = 0xF9,
+	AMDGPU_DOORBELL64_RING4_5                 = 0xFA,
+	AMDGPU_DOORBELL64_RING6_7                 = 0xFB,
 
-	AMDGPU_DOORBELL64_VCE_RING0_1             = 0xFC,
-	AMDGPU_DOORBELL64_VCE_RING2_3             = 0xFD,
-	AMDGPU_DOORBELL64_VCE_RING4_5             = 0xFE,
-	AMDGPU_DOORBELL64_VCE_RING6_7             = 0xFF,
+	AMDGPU_DOORBELL64_UVD_RING0_1             = 0xFC,
+	AMDGPU_DOORBELL64_UVD_RING2_3             = 0xFD,
+	AMDGPU_DOORBELL64_UVD_RING4_5             = 0xFE,
+	AMDGPU_DOORBELL64_UVD_RING6_7             = 0xFF,
 
 	AMDGPU_DOORBELL64_MAX_ASSIGNMENT          = 0xFF,
 	AMDGPU_DOORBELL64_INVALID                 = 0xFFFF
@@ -749,7 +837,6 @@ void amdgpu_ctx_mgr_fini(struct amdgpu_ctx_mgr *mgr);
 struct amdgpu_fpriv {
 	struct amdgpu_vm	vm;
 	struct amdgpu_bo_va	*prt_va;
-	struct amdgpu_bo_va	*csa_va;
 	struct mutex		bo_list_lock;
 	struct idr		bo_list_handles;
 	struct amdgpu_ctx_mgr	ctx_mgr;
@@ -759,14 +846,6 @@ struct amdgpu_fpriv {
 /*
  * residency list
  */
-struct amdgpu_bo_list_entry {
-	struct amdgpu_bo		*robj;
-	struct ttm_validate_buffer	tv;
-	struct amdgpu_bo_va		*bo_va;
-	uint32_t			priority;
-	struct page			**user_pages;
-	int				user_invalidated;
-};
 
 struct amdgpu_bo_list {
 	struct mutex lock;
@@ -929,6 +1008,7 @@ struct amdgpu_gfx_config {
 };
 
 struct amdgpu_cu_info {
+	uint32_t simd_per_cu;
 	uint32_t max_waves_per_simd;
 	uint32_t wave_front_size;
 	uint32_t max_scratch_slots_per_cu;
@@ -1067,9 +1147,6 @@ struct amdgpu_cs_parser {
 
 	/* user fence */
 	struct amdgpu_bo_list_entry	uf_entry;
-
-	unsigned num_post_dep_syncobjs;
-	struct drm_syncobj **post_dep_syncobjs;
 };
 
 #define AMDGPU_PREAMBLE_IB_PRESENT          (1 << 0) /* bit set means command submit involves a preamble IB */
@@ -1133,6 +1210,8 @@ struct amdgpu_wb {
 
 int amdgpu_wb_get(struct amdgpu_device *adev, u32 *wb);
 void amdgpu_wb_free(struct amdgpu_device *adev, u32 wb);
+int amdgpu_wb_get_64bit(struct amdgpu_device *adev, u32 *wb);
+void amdgpu_wb_free_64bit(struct amdgpu_device *adev, u32 wb);
 
 void amdgpu_get_pcie_info(struct amdgpu_device *adev);
 
@@ -1261,6 +1340,7 @@ struct amdgpu_allowed_register_entry {
 	bool grbm_indexed;
 };
 
+
 /*
  * ASIC specific functions.
  */
@@ -1311,6 +1391,9 @@ int amdgpu_cs_wait_fences_ioctl(struct drm_device *dev, void *data,
 
 int amdgpu_gem_metadata_ioctl(struct drm_device *dev, void *data,
 				struct drm_file *filp);
+
+int amdgpu_freesync_ioctl(struct drm_device *dev, void *data,
+			    struct drm_file *filp);
 
 /* VRAM scratch page for HDP bug, default vram page */
 struct amdgpu_vram_scratch {
@@ -1426,7 +1509,7 @@ struct amdgpu_device {
 	bool				is_atom_fw;
 	uint8_t				*bios;
 	uint32_t			bios_size;
-	struct amdgpu_bo		*stolen_vga_memory;
+	struct amdgpu_bo		*stollen_vga_memory;
 	uint32_t			bios_scratch_reg_offset;
 	uint32_t			bios_scratch[AMDGPU_BIOS_NUM_SCRATCH];
 
@@ -1484,6 +1567,9 @@ struct amdgpu_device {
 	struct amdgpu_mman		mman;
 	struct amdgpu_vram_scratch	vram_scratch;
 	struct amdgpu_wb		wb;
+	atomic64_t			vram_usage;
+	atomic64_t			vram_vis_usage;
+	atomic64_t			gtt_usage;
 	atomic64_t			num_bytes_moved;
 	atomic64_t			num_evictions;
 	atomic64_t			num_vram_cpu_page_faults;
@@ -1502,6 +1588,7 @@ struct amdgpu_device {
 	/* display */
 	bool				enable_virtual_display;
 	struct amdgpu_mode_info		mode_info;
+	/* For pre-DCE11. DCE11 and later are in "struct amdgpu_device->dm" */
 	struct work_struct		hotplug_work;
 	struct amdgpu_irq_src		crtc_irq;
 	struct amdgpu_irq_src		pageflip_irq;
@@ -1557,6 +1644,9 @@ struct amdgpu_device {
 
 	/* GDS */
 	struct amdgpu_gds		gds;
+
+	/* display related functionality */
+	struct amdgpu_display_manager dm;
 
 	struct amdgpu_ip_block          ip_blocks[AMDGPU_MAX_IP_NUM];
 	int				num_ip_blocks;
@@ -1617,6 +1707,9 @@ u32 amdgpu_mm_rdoorbell(struct amdgpu_device *adev, u32 index);
 void amdgpu_mm_wdoorbell(struct amdgpu_device *adev, u32 index, u32 v);
 u64 amdgpu_mm_rdoorbell64(struct amdgpu_device *adev, u32 index);
 void amdgpu_mm_wdoorbell64(struct amdgpu_device *adev, u32 index, u64 v);
+
+bool amdgpu_device_asic_has_dc_support(enum amd_asic_type asic_type);
+bool amdgpu_device_has_dc_support(struct amdgpu_device *adev);
 
 /*
  * Registers read & write functions.
@@ -1890,5 +1983,12 @@ amdgpu_cs_find_mapping(struct amdgpu_cs_parser *parser,
 		       uint64_t addr, struct amdgpu_bo **bo);
 int amdgpu_cs_sysvm_access_required(struct amdgpu_cs_parser *parser);
 
+#if defined(CONFIG_DRM_AMD_DC)
+int amdgpu_dm_display_resume(struct amdgpu_device *adev );
+#else
+static inline int amdgpu_dm_display_resume(struct amdgpu_device *adev) { return 0; }
+#endif
+
 #include "amdgpu_object.h"
 #endif
+

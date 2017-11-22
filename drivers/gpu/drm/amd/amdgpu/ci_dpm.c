@@ -22,7 +22,7 @@
  */
 
 #include <linux/firmware.h>
-#include <drm/drmP.h>
+#include "drmP.h"
 #include "amdgpu.h"
 #include "amdgpu_pm.h"
 #include "amdgpu_ucode.h"
