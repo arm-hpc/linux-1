@@ -54,7 +54,6 @@ static int alloc_gtt_mem(struct kgd_dev *kgd, size_t size,
 
 static void free_gtt_mem(struct kgd_dev *kgd, void *mem_obj);
 
-static uint64_t get_vmem_size(struct kgd_dev *kgd);
 static uint64_t get_gpu_clock_counter(struct kgd_dev *kgd);
 
 static uint32_t get_max_engine_clock_in_mhz(struct kgd_dev *kgd);
@@ -78,7 +77,8 @@ static int kgd_hqd_load(struct kgd_dev *kgd, void *mqd, uint32_t pipe_id,
 			uint32_t queue_id, uint32_t __user *wptr,
 			uint32_t wptr_shift, uint32_t wptr_mask,
 			struct mm_struct *mm);
-static int kgd_hqd_sdma_load(struct kgd_dev *kgd, void *mqd);
+static int kgd_hqd_sdma_load(struct kgd_dev *kgd, void *mqd,
+                             uint32_t __user *wptr, struct mm_struct *mm);
 static bool kgd_hqd_is_occupied(struct kgd_dev *kgd, uint64_t queue_address,
 				uint32_t pipe_id, uint32_t queue_id);
 
@@ -109,7 +109,6 @@ static void write_vmid_invalidate_request(struct kgd_dev *kgd, uint8_t vmid);
 static const struct kfd2kgd_calls kfd2kgd = {
 	.init_gtt_mem_allocation = alloc_gtt_mem,
 	.free_gtt_mem = free_gtt_mem,
-	.get_vmem_size = get_vmem_size,
 	.get_gpu_clock_counter = get_gpu_clock_counter,
 	.get_max_engine_clock_in_mhz = get_max_engine_clock_in_mhz,
 	.program_sh_mem_settings = kgd_program_sh_mem_settings,
@@ -315,15 +314,6 @@ static void free_gtt_mem(struct kgd_dev *kgd, void *mem_obj)
 	radeon_bo_unreserve(mem->bo);
 	radeon_bo_unref(&(mem->bo));
 	kfree(mem);
-}
-
-static uint64_t get_vmem_size(struct kgd_dev *kgd)
-{
-	struct radeon_device *rdev = (struct radeon_device *)kgd;
-
-	BUG_ON(kgd == NULL);
-
-	return rdev->mc.real_vram_size;
 }
 
 static uint64_t get_gpu_clock_counter(struct kgd_dev *kgd)
@@ -562,7 +552,8 @@ static int kgd_hqd_load(struct kgd_dev *kgd, void *mqd, uint32_t pipe_id,
 	return 0;
 }
 
-static int kgd_hqd_sdma_load(struct kgd_dev *kgd, void *mqd)
+static int kgd_hqd_sdma_load(struct kgd_dev *kgd, void *mqd,
+                             uint32_t __user *wptr, struct mm_struct *mm)
 {
 	struct cik_sdma_rlc_registers *m;
 	uint32_t sdma_base_addr;
